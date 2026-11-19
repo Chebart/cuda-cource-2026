@@ -23,29 +23,24 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
-      options: --cap-add=NET_ADMIN
     defaults:
       run:
         shell: bash
-    env:
-      CI_EGRESS_ISOLATED_RUNNER: "1"
-      CI_EGRESS_JOB_CONTAINER: "1"
     permissions:
       contents: read
       pull-requests: read
       statuses: write
     outputs:
-      trusted_sha: ${{ steps.trusted.outputs.sha }}
       head_sha: ${{ steps.pending.outputs.head_sha }}
       fingerprint: ${{ steps.pending.outputs.fingerprint }}
     steps:
-      - name: Доверенный bootstrap контейнера до checkout и guard
+      - name: Установка инструментов управляющего job
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 python3-venv nftables sudo libstdc++6
+          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
       - &course_checkout
         name: Загрузка доверенного коммита курса
         id: course_checkout
@@ -80,11 +75,6 @@ jobs:
         env:
           EXPECTED_RUNNER_SHA: ${{ steps.runner_pin.outputs.sha }}
         run: '[[ $(git -C lab-runner rev-parse HEAD) == "$EXPECTED_RUNNER_SHA" ]]'
-      - name: Закрытие исходящей сети
-        id: network
-        env:
-          CI_EGRESS_ALLOWED_ENDPOINTS: ${{ vars.CI_EGRESS_ALLOWED_ENDPOINTS }}
-        run: python3 -m tools.ci_network start --directory .ci-network
       - name: Неизменяемые данные восстановления PR
         id: pending
         env:
@@ -104,9 +94,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python3 -m tools.submission_check.report start --pr-number "$PR_NUMBER" --state-file .ci-state/state.json
-      - name: Снятие только собственного сетевого фильтра
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.ci_network stop --directory .ci-network
 
   validate:
     name: Проверка сдачи
@@ -115,24 +102,20 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
-      options: --cap-add=NET_ADMIN
     defaults:
       run:
         shell: bash
-    env:
-      CI_EGRESS_ISOLATED_RUNNER: "1"
-      CI_EGRESS_JOB_CONTAINER: "1"
     permissions:
       contents: read
       pull-requests: read
     steps:
-      - name: Доверенный bootstrap контейнера до checkout и guard
+      - name: Установка инструментов управляющего job
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 python3-venv nftables sudo libstdc++6
+          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
       - *course_checkout
       - *runner_pin
       - *runner_checkout
@@ -144,12 +127,8 @@ jobs:
       - name: Установка доверенных инструментов проверки
         run: |
           python -m pip install --index-url https://pypi.org/simple --require-hashes -r lab-runner/.ci/requirements.txt
-      - name: Закрытие сети до чтения сдачи
-        id: network
-        env:
-          CI_EGRESS_ALLOWED_ENDPOINTS: ${{ vars.CI_EGRESS_ALLOWED_ENDPOINTS }}
-        run: python3 -m tools.ci_network start --directory .ci-network
       - name: Проверка структуры, README и форматирования
+        id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -159,7 +138,7 @@ jobs:
           mkdir -p .ci-result
           python -m tools.submission_check ci --pr-number "$PR_NUMBER" --expected-head-sha "$HEAD_SHA" --expected-fingerprint "$FINGERPRINT" --trusted-root course --output .ci-result/result.json
       - name: Сохранение замечаний
-        if: ${{ always() && steps.network.outcome == 'success' }}
+        if: ${{ always() && steps.verify_runner.outcome == 'success' && steps.check.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: submission-result-${{ github.run_id }}-${{ github.run_attempt }}
@@ -167,9 +146,6 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 1
-      - name: Снятие только собственного сетевого фильтра
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.ci_network stop --directory .ci-network
 
   report:
     name: Результат проверки
@@ -179,35 +155,26 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
-      options: --cap-add=NET_ADMIN
     defaults:
       run:
         shell: bash
-    env:
-      CI_EGRESS_ISOLATED_RUNNER: "1"
-      CI_EGRESS_JOB_CONTAINER: "1"
     permissions:
       contents: read
       pull-requests: read
       actions: read
       statuses: write
     steps:
-      - name: Доверенный bootstrap контейнера до checkout и guard
+      - name: Установка инструментов управляющего job
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 python3-venv nftables sudo libstdc++6
+          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
       - *course_checkout
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Закрытие исходящей сети
-        id: network
-        env:
-          CI_EGRESS_ALLOWED_ENDPOINTS: ${{ vars.CI_EGRESS_ALLOWED_ENDPOINTS }}
-        run: python3 -m tools.ci_network start --directory .ci-network
       - name: Проверка происхождения seed и результата
         id: artifacts
         env:
@@ -228,12 +195,9 @@ jobs:
           path: .ci-result
           merge-multiple: true
       - name: Завершение только собственного статуса PR
-        if: ${{ always() && steps.network.outcome == 'success' }}
+        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           VALIDATION_OUTCOME: ${{ steps.artifacts.outputs.submission_result_outcome || needs.validate.result }}
         run: python3 -m tools.submission_check.report finish --pr-number "$PR_NUMBER" --state-file .ci-state/state.json --result-file .ci-result/result.json --validation-outcome "$VALIDATION_OUTCOME"
-      - name: Снятие только собственного сетевого фильтра
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.ci_network stop --directory .ci-network

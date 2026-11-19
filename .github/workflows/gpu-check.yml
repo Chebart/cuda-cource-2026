@@ -22,13 +22,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
-      options: --cap-add=NET_ADMIN
     defaults:
       run:
         shell: bash
-    env:
-      CI_EGRESS_ISOLATED_RUNNER: "1"
-      CI_EGRESS_JOB_CONTAINER: "1"
     timeout-minutes: 10
     permissions:
       contents: read
@@ -36,16 +32,15 @@ jobs:
       actions: read
       statuses: write
     outputs:
-      trusted_sha: ${{ steps.trusted.outputs.sha }}
       ready: ${{ steps.prepare.outputs.ready }}
     steps:
-      - name: Доверенный bootstrap контейнера до checkout и guard
+      - name: Установка инструментов управляющего job
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 python3-venv nftables sudo libstdc++6
+          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
       - &course_checkout
         name: Загрузка доверенного коммита курса
         id: course_checkout
@@ -80,11 +75,6 @@ jobs:
         env:
           EXPECTED_RUNNER_SHA: ${{ steps.runner_pin.outputs.sha }}
         run: '[[ $(git -C lab-runner rev-parse HEAD) == "$EXPECTED_RUNNER_SHA" ]]'
-      - name: Закрытие исходящей сети
-        id: network
-        env:
-          CI_EGRESS_ALLOWED_ENDPOINTS: ${{ vars.CI_EGRESS_ALLOWED_ENDPOINTS }}
-        run: python3 -m tools.ci_network start --directory .ci-network
       - name: Снимок сдачи и неизменяемые данные восстановления
         id: prepare
         env:
@@ -118,9 +108,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
-      - name: Снятие только собственного сетевого фильтра
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.ci_network stop --directory .ci-network
 
   run:
     name: Проверка на GPU-хосте
@@ -133,41 +120,23 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      CI_EGRESS_ISOLATED_RUNNER: "1"
-      CI_EGRESS_JOB_CONTAINER: "1"
     timeout-minutes: 160
     permissions:
       contents: read
       pull-requests: read
       actions: read
     steps:
-      - name: Доверенный bootstrap контейнера до checkout и guard
+      - name: Установка инструментов управляющего job
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 python3-venv nftables sudo libstdc++6 openvpn openssh-client iproute2
+          apt-get install --yes --no-install-recommends ca-certificates git python3 sudo libstdc++6 openvpn openssh-client iproute2
       - *course_checkout
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Только безопасные метаданные доверенного профиля соединения
-        id: connection
-        env:
-          SSH_HOST: ${{ vars.SSH_HOST }}
-          OPEN_VPN_CONFIG: ${{ secrets.OPEN_VPN_CONFIG }}
-        run: python3 -m tools.gpu_check.connection >> "$GITHUB_OUTPUT"
-      - name: Закрытие сети перед artifact и подключением VPN
-        id: network
-        shell: bash
-        env:
-          CI_EGRESS_ALLOWED_ENDPOINTS: ${{ vars.CI_EGRESS_ALLOWED_ENDPOINTS }}
-          SSH_ADDRESS: ${{ steps.connection.outputs.ssh_host }}
-          VPN_ENDPOINT: ${{ steps.connection.outputs.vpn_endpoint }}
-        run: |
-          python3 -m tools.ci_network start --directory .ci-network --vpn-endpoint "$VPN_ENDPOINT" --ssh-host "$SSH_ADDRESS"
       - name: Проверка происхождения запроса
         id: request
         env:
@@ -190,17 +159,17 @@ jobs:
           test -n "$SSH_HOST" || { echo '::error::Для GPU CI требуется SSH_HOST.'; exit 1; }
           python3 -m tools.gpu_check.vpn start --directory .ci-vpn --target "$SSH_HOST"
       - name: Передача запроса ограниченному SSH-приёмнику
+        id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
           SSH_HOST: ${{ vars.SSH_HOST }}
           SSH_KEY: ${{ secrets.SSH_KEY }}
-          OPEN_VPN_CONFIG: ${{ secrets.OPEN_VPN_CONFIG }}
-        run: python3 -m tools.gpu_check run --request-file .ci-gpu/request.json --result-file .ci-gpu/result.json --timeout 9120
+        run: python3 -m tools.gpu_check run --request-file .ci-gpu/request.json --result-file .ci-gpu/result.json --vpn-directory .ci-vpn --timeout 9120
       - name: Отключение только собственного VPN
         if: ${{ always() && steps.verify_runner.outcome == 'success' }}
         run: python3 -m tools.gpu_check.vpn stop --directory .ci-vpn
       - name: Сохранение публичного результата без runtime-логов
-        if: ${{ always() && steps.network.outcome == 'success' }}
+        if: ${{ always() && steps.verify_runner.outcome == 'success' && steps.check.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gpu-result-${{ github.run_id }}-${{ github.run_attempt }}
@@ -208,9 +177,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 1
-      - name: Снятие только собственного сетевого фильтра
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.ci_network stop --directory .ci-network
 
   report:
     name: Публикация результата GPU
@@ -219,13 +185,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
-      options: --cap-add=NET_ADMIN
     defaults:
       run:
         shell: bash
-    env:
-      CI_EGRESS_ISOLATED_RUNNER: "1"
-      CI_EGRESS_JOB_CONTAINER: "1"
     timeout-minutes: 10
     permissions:
       contents: read
@@ -233,22 +195,17 @@ jobs:
       actions: read
       statuses: write
     steps:
-      - name: Доверенный bootstrap контейнера до checkout и guard
+      - name: Установка инструментов управляющего job
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 python3-venv nftables sudo libstdc++6
+          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
       - *course_checkout
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Закрытие исходящей сети
-        id: network
-        env:
-          CI_EGRESS_ALLOWED_ENDPOINTS: ${{ vars.CI_EGRESS_ALLOWED_ENDPOINTS }}
-        run: python3 -m tools.ci_network start --directory .ci-network
       - name: Проверка происхождения seed и результата
         id: artifacts
         env:
@@ -269,7 +226,7 @@ jobs:
           path: .ci-gpu
           merge-multiple: true
       - name: Завершение только собственного статуса PR
-        if: ${{ always() && steps.network.outcome == 'success' }}
+        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -278,6 +235,3 @@ jobs:
           python3 -m tools.gpu_check report --pr-number "$PR_NUMBER"
           --state-file .ci-gpu/state.json --result-file .ci-gpu/result.json
           --run-outcome "$RUN_OUTCOME"
-      - name: Снятие только собственного сетевого фильтра
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.ci_network stop --directory .ci-network
