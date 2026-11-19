@@ -114,9 +114,6 @@ jobs:
     needs: prepare
     if: ${{ needs.prepare.outputs.ready == 'true' }}
     runs-on: ubuntu-24.04
-    container:
-      image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
-      options: --cap-add=NET_ADMIN --device=/dev/net/tun
     defaults:
       run:
         shell: bash
@@ -126,13 +123,11 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - name: Установка инструментов управляющего job
+      - name: Установка OpenVPN
         shell: sh
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 sudo libstdc++6 openvpn openssh-client iproute2
+          sudo -n apt-get update
+          sudo -n apt-get install --yes --no-install-recommends openvpn
       - *course_checkout
       - *runner_pin
       - *runner_checkout
