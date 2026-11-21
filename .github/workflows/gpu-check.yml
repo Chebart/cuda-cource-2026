@@ -171,8 +171,6 @@ jobs:
     needs: [prepare, run]
     if: ${{ always() && github.ref_protected && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.GPU_CI_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
-    container:
-      image: docker.io/library/ubuntu:24.04@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
     defaults:
       run:
         shell: bash
@@ -183,7 +181,6 @@ jobs:
       actions: read
       statuses: write
     steps:
-      - *install_base
       - *course_checkout
       - *runner_pin
       - *runner_checkout
@@ -192,7 +189,7 @@ jobs:
         id: artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 -m tools.submission_check.artifacts --kinds gpu-state gpu-result --required-kind gpu-state
+        run: python3 -m tools.submission_check.artifacts --kinds gpu-state gpu-result --required-kind gpu-state --gpu-report-replay
       - name: Скачать состояние проверки
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -213,7 +210,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_OUTCOME: ${{ steps.artifacts.outputs.gpu_result_outcome || needs.run.result }}
+          GPU_QUEUE_BUCKET: ${{ vars.GPU_QUEUE_BUCKET }}
+          GPU_QUEUE_ACCESS_KEY_ID: ${{ secrets.GPU_QUEUE_ACCESS_KEY_ID }}
+          GPU_QUEUE_SECRET_ACCESS_KEY: ${{ secrets.GPU_QUEUE_SECRET_ACCESS_KEY }}
         run: >-
           python3 -m tools.gpu_check report --pr-number "$PR_NUMBER"
           --state-file .ci-gpu/state.json --result-file .ci-gpu/result.json
-          --run-outcome "$RUN_OUTCOME"
+          --run-outcome "$RUN_OUTCOME" --s3-bucket "$GPU_QUEUE_BUCKET"
