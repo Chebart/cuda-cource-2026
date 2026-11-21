@@ -2,7 +2,7 @@ name: GPU — корректность лабораторной
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+    types: [opened, synchronize]
 
 permissions: {}
 
@@ -123,11 +123,6 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - name: Установка OpenVPN
-        shell: sh
-        run: |
-          sudo -n apt-get update
-          sudo -n apt-get install --yes --no-install-recommends openvpn
       - *course_checkout
       - *runner_pin
       - *runner_checkout
@@ -143,26 +138,17 @@ jobs:
           artifact-ids: ${{ steps.request.outputs.artifact_id }}
           path: .ci-gpu
           merge-multiple: true
-      - name: Проверка обязательного OpenVPN и соединение
-        shell: bash
-        env:
-          SSH_HOST: ${{ vars.SSH_HOST }}
-          OPEN_VPN_CONFIG: ${{ secrets.OPEN_VPN_CONFIG }}
-          OPEN_VPN_SECRET: ${{ secrets.OPEN_VPN_SECRET }}
-        run: |
-          test -n "$OPEN_VPN_CONFIG" || { echo '::error::Для GPU CI требуется OPEN_VPN_CONFIG.'; exit 1; }
-          test -n "$SSH_HOST" || { echo '::error::Для GPU CI требуется SSH_HOST.'; exit 1; }
-          python3 -m tools.gpu_check.vpn start --directory .ci-vpn --target "$SSH_HOST"
-      - name: Передача запроса ограниченному SSH-приёмнику
+      - name: Отправить задание в S3 и дождаться результата
         id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          SSH_HOST: ${{ vars.SSH_HOST }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-        run: python3 -m tools.gpu_check run --request-file .ci-gpu/request.json --result-file .ci-gpu/result.json --vpn-directory .ci-vpn --timeout 9120
-      - name: Отключение только собственного VPN
-        if: ${{ always() && steps.verify_runner.outcome == 'success' }}
-        run: python3 -m tools.gpu_check.vpn stop --directory .ci-vpn
+          GPU_QUEUE_BUCKET: ${{ vars.GPU_QUEUE_BUCKET }}
+          GPU_QUEUE_ACCESS_KEY_ID: ${{ secrets.GPU_QUEUE_ACCESS_KEY_ID }}
+          GPU_QUEUE_SECRET_ACCESS_KEY: ${{ secrets.GPU_QUEUE_SECRET_ACCESS_KEY }}
+        run: >-
+          python3 -m tools.gpu_check run --request-file .ci-gpu/request.json
+          --result-file .ci-gpu/result.json --s3-bucket "$GPU_QUEUE_BUCKET"
+          --poll-interval 10 --timeout 9120
       - name: Сохранение публичного результата без runtime-логов
         if: ${{ always() && steps.verify_runner.outcome == 'success' && steps.check.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
