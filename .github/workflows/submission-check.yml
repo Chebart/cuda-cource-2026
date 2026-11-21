@@ -34,15 +34,22 @@ jobs:
       head_sha: ${{ steps.pending.outputs.head_sha }}
       fingerprint: ${{ steps.pending.outputs.fingerprint }}
     steps:
-      - name: Установка инструментов управляющего job
+      - &install_base
+        name: Установить системные пакеты
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
+          log="$RUNNER_TEMP/apt.log"
+          if ! {
+            apt-get update &&
+            apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
+          } > "$log" 2>&1; then
+            cat "$log"
+            exit 1
+          fi
       - &course_checkout
-        name: Загрузка доверенного коммита курса
+        name: Получить код курса
         id: course_checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -50,7 +57,7 @@ jobs:
           path: course
           persist-credentials: false
       - &runner_pin
-        name: Проверка коммита курса и SHA раннера
+        name: Проверить коммит курса и прочитать пин
         id: runner_pin
         run: |
           [[ $(git -C course rev-parse HEAD) == "$CI_TRUSTED_SHA" ]]
@@ -60,7 +67,7 @@ jobs:
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
       - &runner_checkout
-        name: Загрузка закреплённого приватного раннера
+        name: Получить закреплённый раннер
         id: runner_checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -70,18 +77,18 @@ jobs:
           token: ${{ secrets.LAB_RUNNER_READ_TOKEN }}
           persist-credentials: false
       - &verify_runner
-        name: Проверка загруженного коммита раннера
+        name: Проверить коммит раннера
         id: verify_runner
         env:
           EXPECTED_RUNNER_SHA: ${{ steps.runner_pin.outputs.sha }}
         run: '[[ $(git -C lab-runner rev-parse HEAD) == "$EXPECTED_RUNNER_SHA" ]]'
-      - name: Неизменяемые данные восстановления PR
+      - name: Подготовить состояние проверки
         id: pending
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python3 -m tools.submission_check.report pending --seed-only --pr-number "$PR_NUMBER" --state-file .ci-state/state.json
-      - name: Сохранение seed до pending
+      - name: Сохранить состояние проверки
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: submission-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -89,7 +96,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 1
-      - name: Публикация принадлежащего запуску pending
+      - name: Отметить проверку в PR
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -109,23 +116,29 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Установка инструментов управляющего job
+      - name: Установить системные пакеты
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3.12-venv libstdc++6
+          log="$RUNNER_TEMP/apt.log"
+          if ! {
+            apt-get update &&
+            apt-get install --yes --no-install-recommends ca-certificates git python3.12-venv libstdc++6
+          } > "$log" 2>&1; then
+            cat "$log"
+            exit 1
+          fi
       - *course_checkout
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Установка доверенных инструментов проверки
+      - name: Установить инструменты проверки
         run: |
           /usr/bin/python3.12 -m venv "$RUNNER_TEMP/submission-tools"
-          "$RUNNER_TEMP/submission-tools/bin/python" -m pip install --index-url https://pypi.org/simple --require-hashes -r lab-runner/.ci/requirements.txt
+          "$RUNNER_TEMP/submission-tools/bin/python" -m pip install --quiet --disable-pip-version-check --index-url https://pypi.org/simple --require-hashes -r lab-runner/.ci/requirements.txt
           printf '%s\n' "$RUNNER_TEMP/submission-tools/bin" >> "$GITHUB_PATH"
-      - name: Проверка структуры, README и форматирования
+      - name: Проверить структуру и оформление
         id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -135,7 +148,7 @@ jobs:
         run: |
           mkdir -p .ci-result
           python -m tools.submission_check ci --pr-number "$PR_NUMBER" --expected-head-sha "$HEAD_SHA" --expected-fingerprint "$FINGERPRINT" --trusted-root course --output .ci-result/result.json
-      - name: Сохранение замечаний
+      - name: Сохранить результат проверки
         if: ${{ always() && steps.verify_runner.outcome == 'success' && steps.check.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -162,29 +175,23 @@ jobs:
       actions: read
       statuses: write
     steps:
-      - name: Установка инструментов управляющего job
-        shell: sh
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
+      - *install_base
       - *course_checkout
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Проверка происхождения seed и результата
+      - name: Проверить происхождение артефактов
         id: artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 -m tools.submission_check.artifacts --kinds submission-state submission-result --required-kind submission-state
-      - name: Загрузка данных восстановления
+      - name: Скачать состояние проверки
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           artifact-ids: ${{ steps.artifacts.outputs.submission_state_artifact_id }}
           path: .ci-state
           merge-multiple: true
-      - name: Загрузка результата проверки
+      - name: Скачать результат проверки
         if: ${{ steps.artifacts.outputs.submission_result_artifact_id != '' }}
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -192,7 +199,7 @@ jobs:
           artifact-ids: ${{ steps.artifacts.outputs.submission_result_artifact_id }}
           path: .ci-result
           merge-multiple: true
-      - name: Завершение только собственного статуса PR
+      - name: Опубликовать итог в PR
         if: ${{ always() && steps.verify_runner.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}

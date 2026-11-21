@@ -34,15 +34,22 @@ jobs:
     outputs:
       ready: ${{ steps.prepare.outputs.ready }}
     steps:
-      - name: Установка инструментов управляющего job
+      - &install_base
+        name: Установить системные пакеты
         shell: sh
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
+          log="$RUNNER_TEMP/apt.log"
+          if ! {
+            apt-get update &&
+            apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
+          } > "$log" 2>&1; then
+            cat "$log"
+            exit 1
+          fi
       - &course_checkout
-        name: Загрузка доверенного коммита курса
+        name: Получить код курса
         id: course_checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -50,7 +57,7 @@ jobs:
           path: course
           persist-credentials: false
       - &runner_pin
-        name: Проверка коммита курса и SHA раннера
+        name: Проверить коммит курса и прочитать пин
         id: runner_pin
         run: |
           [[ $(git -C course rev-parse HEAD) == "$CI_TRUSTED_SHA" ]]
@@ -60,7 +67,7 @@ jobs:
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
       - &runner_checkout
-        name: Загрузка закреплённого приватного раннера
+        name: Получить закреплённый раннер
         id: runner_checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -70,12 +77,12 @@ jobs:
           token: ${{ secrets.LAB_RUNNER_READ_TOKEN }}
           persist-credentials: false
       - &verify_runner
-        name: Проверка загруженного коммита раннера
+        name: Проверить коммит раннера
         id: verify_runner
         env:
           EXPECTED_RUNNER_SHA: ${{ steps.runner_pin.outputs.sha }}
         run: '[[ $(git -C lab-runner rev-parse HEAD) == "$EXPECTED_RUNNER_SHA" ]]'
-      - name: Снимок сдачи и неизменяемые данные восстановления
+      - name: Подготовить запрос GPU
         id: prepare
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -86,7 +93,7 @@ jobs:
           --pr-number "$PR_NUMBER" --event-file "$GITHUB_EVENT_PATH"
           --runtime-revision "$GPU_RUNTIME"
           --request-file .ci-gpu/request.json --state-file .ci-gpu/state.json
-      - name: Сохранение seed до pending
+      - name: Сохранить состояние проверки
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gpu-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -94,12 +101,12 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
-      - name: Публикация принадлежащего запуску pending
+      - name: Отметить проверку в PR
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python3 -m tools.gpu_check pending --pr-number "$PR_NUMBER" --state-file .ci-gpu/state.json
-      - name: Сохранение только исходников запроса
+      - name: Сохранить запрос GPU
         if: ${{ success() && steps.prepare.outputs.ready == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -127,18 +134,18 @@ jobs:
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Проверка происхождения запроса
+      - name: Проверить происхождение запроса
         id: request
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 -m tools.submission_check.artifacts --kind gpu-request
-      - name: Загрузка запроса с исходниками
+      - name: Скачать запрос GPU
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           artifact-ids: ${{ steps.request.outputs.artifact_id }}
           path: .ci-gpu
           merge-multiple: true
-      - name: Отправить задание в S3 и дождаться результата
+      - name: Проверить сдачу на GPU через S3
         id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -149,7 +156,7 @@ jobs:
           python3 -m tools.gpu_check run --request-file .ci-gpu/request.json
           --result-file .ci-gpu/result.json --s3-bucket "$GPU_QUEUE_BUCKET"
           --poll-interval 10 --timeout 9120
-      - name: Сохранение публичного результата без runtime-логов
+      - name: Сохранить результат GPU
         if: ${{ always() && steps.verify_runner.outcome == 'success' && steps.check.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -176,29 +183,23 @@ jobs:
       actions: read
       statuses: write
     steps:
-      - name: Установка инструментов управляющего job
-        shell: sh
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends ca-certificates git python3 libstdc++6
+      - *install_base
       - *course_checkout
       - *runner_pin
       - *runner_checkout
       - *verify_runner
-      - name: Проверка происхождения seed и результата
+      - name: Проверить происхождение артефактов
         id: artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 -m tools.submission_check.artifacts --kinds gpu-state gpu-result --required-kind gpu-state
-      - name: Загрузка владельца статуса
+      - name: Скачать состояние проверки
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           artifact-ids: ${{ steps.artifacts.outputs.gpu_state_artifact_id }}
           path: .ci-gpu
           merge-multiple: true
-      - name: Загрузка публичного результата
+      - name: Скачать результат GPU
         if: ${{ steps.artifacts.outputs.gpu_result_artifact_id != '' }}
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -206,7 +207,7 @@ jobs:
           artifact-ids: ${{ steps.artifacts.outputs.gpu_result_artifact_id }}
           path: .ci-gpu
           merge-multiple: true
-      - name: Завершение только собственного статуса PR
+      - name: Опубликовать итог в PR
         if: ${{ always() && steps.verify_runner.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
