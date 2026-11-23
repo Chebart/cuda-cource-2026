@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Чтение и запись CUDA-массивов · CUDA / Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+<style>
+  #texture .texture-grid-table { width: 100%; font-size: 1rem; }
+  #texture .texture-grid-table caption { text-align: left; margin: 8px 0; }
+  #texture code { font-size: max(18px, .91em); }
+  #texture .code-frame code { font-size: 18px; }
+  .texture-sampling { width: min(100%, 340px); height: auto; justify-self: center; align-self: center; }
+  #texture .diagram-panel p + h3 { margin-top: 16px; }
+  .surface-path { display: grid; gap: 6px; margin-top: 12px; }
+  .surface-path .path-arrow { color: var(--muted); }
+  .surface-path .diagram-strip { margin: 4px 0; }
+  .diagram-panel .surface-matrix { border-collapse: separate; border-spacing: 4px; margin: 2px 0 0 -4px; }
+  .diagram-panel .surface-matrix td { min-width: 42px; text-align: center; border: 1px solid var(--line); border-radius: 4px; }
+  .diagram-panel .surface-matrix .surface-target { border: 2px solid var(--purple); background: var(--purple-wash); font-weight: 750; }
+  #line-tip dd { white-space: pre-line; }
+</style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Примеры 08–09</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#texture">08 · Чтение через texture</a>
+    <a href="#surface">09 · Запись через surface</a>
+  </nav>
+<header class="hero">
+  <p class="kicker">CUDA · Лекция 03 · Листинги 08 и 09</p>
+  <h1>CUDA-массивы: читаем через texture, пишем через surface</h1>
+  <p class="lead">В первой программе просим GPU получить число между соседними пикселями. Во второй записываем четыре числа в ячейки нового массива. Результат первой программы для второй не нужен.</p>
+</header>
+<article class="lesson-unit" id="texture">
+  <section class="flow" aria-labelledby="texture-flow-title">
+    <h2 id="texture-flow-title">Texture: читаем между четырьмя пикселями</h2>
+    <p class="flow-intro">Берём массив 2×2: сверху <code>[0, 4]</code>, снизу <code>[8, 12]</code>. По индексу мы взяли бы число из одной ячейки. А хотим узнать, какое число получится посередине между всеми четырьмя. Передаём координаты точки в <code>tex2D</code> и включаем линейный фильтр, чтобы GPU смешал соседние числа.</p>
+    <figure class="flow-figure" aria-labelledby="texture-figure-title">
+      <figcaption id="texture-figure-title">Точка (1, 1) между четырьмя пикселями</figcaption>
+      <div class="diagram-grid">
+        <svg class="texture-sampling" viewBox="0 0 300 238" role="img" aria-labelledby="texture-diagram-label texture-diagram-desc">
+          <title id="texture-diagram-label">Точка (1, 1) в середине массива 2×2</title>
+          <desc id="texture-diagram-desc">По X и Y центры пикселей находятся в 0.5 и 1.5. Сверху лежат 0 и 4, снизу — 8 и 12. Точка (1, 1) ровно посередине, поэтому берём по четверти от каждого числа.</desc>
+          <g fill="#fff" stroke="#b7a5c9" stroke-width="1.5">
+            <rect x="43" y="14" width="214" height="180" rx="8"/>
+            <path d="M150 14v180 M43 104h214"/>
+          </g>
+          <g text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="13" fill="var(--muted)" aria-hidden="true">
+            <text x="96" y="7">x = 0.5</text><text x="203" y="7">x = 1.5</text>
+            <text x="21" y="7">Y</text><text x="21" y="59">0.5</text><text x="21" y="149">1.5</text>
+          </g>
+          <g fill="none" stroke="#792ce6" stroke-width="2" aria-hidden="true"><path d="M96 59L150 104 203 59 M96 149L150 104 203 149"/></g>
+          <g text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="18" font-weight="650" fill="#181420">
+            <g fill="#fff" stroke="#792ce6" stroke-width="1.5"><circle cx="96" cy="59" r="17"/><circle cx="203" cy="59" r="17"/><circle cx="96" cy="149" r="17"/><circle cx="203" cy="149" r="17"/></g>
+            <text x="96" y="59">0</text><text x="203" y="59">4</text><text x="96" y="149">8</text><text x="203" y="149">12</text>
+            <circle cx="150" cy="104" r="6" fill="#792ce6"/>
+            <text x="150" y="217" font-size="17">● Точка (1, 1)</text>
+          </g>
+        </svg>
+        <div class="diagram-panel">
+          <h3>Что прочитаем в точке (1, 1)?</h3>
+          <div class="diagram-strip"><span class="diagram-mark">(1, 1)</span><span>→</span><span class="diagram-mark active">6</span></div>
+          <p>По X и по Y точка ровно посередине. Поэтому складываем по четверти от каждого числа: <code>(0 + 4 + 8 + 12) / 4 = 6</code>.</p>
+          <p>Это линейная фильтрация по двум осям, или билинейная интерполяция. Число <code>6</code> не лежит в массиве: GPU считает его при чтении через <code>tex2D</code>.</p>
+        </div>
+      </div>
+      <p class="figure-note">Здесь координаты задаём в пикселях. <code>(0.5, 0.5)</code> — центр первой ячейки с числом <code>0</code>. <code>(1, 1)</code> — точка между центрами, а не индекс последней ячейки <code>[1][1]</code>.</p>
+    </figure>
+  </section>
+  <section class="listing" aria-labelledby="texture-listing-title">
+    <div class="listing-header"><h2 id="texture-listing-title">Код: читаем точку (1, 1) с линейным фильтром</h2><div class="actions"><a href="08_texture.cu" download>Скачать .cu</a><button type="button" data-copy="texture-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div></div>
+    <div class="listing-grid">
+      <aside class="reading">
+        <h3>Как подготовить массив к чтению</h3>
+        <p><strong>Готовим пиксели.</strong> У нас по одному <code>float</code> на пиксель. По этому формату выделяем CUDA-массив 2×2. Через <code>cudaMemcpy2DToArray</code> копируем из <code>pixels</code> две строки: сначала <code>[0, 4]</code>, потом <code>[8, 12]</code>.</p>
+        <p><strong>Настраиваем чтение.</strong> В <code>resource</code> указываем, откуда читать, в <code>description</code> — как. В <a href="#texture-modes">строке 35</a> включаем линейный фильтр. В <a href="#texture-object">строке 38</a> получаем <code>texture</code> — идентификатор, по которому ядро найдёт массив и настройки. Пиксели остаются в массиве.</p>
+        <p><strong>Получаем число между пикселями.</strong> В <a href="#texture-linear-read">строке 12</a> передаём <code>texture</code> и точку <code>(1, 1)</code> в <code>tex2D&lt;float&gt;</code>. Получаем число <code>6</code> типа <code>float</code> и пишем его в <code>output[0]</code>.</p>
+      </aside>
+      <figure class="code-frame" id="texture-code">
+  <figcaption>08_texture.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем CUDA Runtime." data-how="Заголовок объявляет команды и типы CUDA из листинга." data-why="Отсюда, например, компилятор узнаёт cudaArray_t и cudaMallocArray."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Подключаем вывод текста." data-how="Здесь объявлены printf, fprintf и puts." data-why="Ими печатаем ответ и сообщения об ошибках."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Подключаем функции завершения программы." data-how="Отсюда берутся std::exit, EXIT_SUCCESS и EXIT_FAILURE." data-why="Код выхода сообщает, удалось ли выполнить и проверить пример."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">4</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем один вызов CUDA." data-how="Передаём в check статус, который вернул этот вызов." data-why="Не продолжаем работу, если CUDA не смогла выполнить команду."><span class="line-no" aria-hidden="true">5</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Если ошибки нет, идём дальше." data-how="cudaSuccess — статус успеха. return выходит только из check." data-why="После успешной проверки выполняется следующая строка программы."><span class="line-no" aria-hidden="true">6</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печатаем, почему вызов не удался." data-how="cudaGetErrorString превращает статус в текст, fprintf отправляет его в stderr." data-why="Так видно сообщение CUDA, а не только код ошибки."><span class="line-no" aria-hidden="true">7</span><span class="src">    std::fprintf(stderr, &quot;%s\n&quot;, <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Останавливаем программу при ошибке CUDA." data-how="std::exit(EXIT_FAILURE) завершает всю программу, не только check." data-why="Дальше данные или объект могут быть не готовы."><span class="line-no" aria-hidden="true">8</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Конец check." data-how="На успехе функция уже вернулась. При ошибке она завершила программу." data-why="Основной код не продолжится после ошибки CUDA."><span class="line-no" aria-hidden="true">9</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">10</span><span class="src"></span></span>
+<span class="source-line" data-what="В этом ядре читаем одну точку." data-how="texture — идентификатор, который получили на CPU, когда связали массив с настройками. output — адрес отдельного буфера на GPU." data-why="По texture найдём пиксели, в output положим ответ для CPU."><span class="line-no" aria-hidden="true">11</span><span class="src"><span class="call">__global__</span> void sample(<span class="call">cudaTextureObject_t</span> texture, float* output) {</span></span>
+<span class="source-line key" id="texture-linear-read" data-what="Читаем число через tex2D. &lt;float&gt; — тип результата." data-how="По texture CUDA находит массив и настройки чтения.&#10;Первое 1.0f — X, второе — Y. По обеим осям мы ровно между центрами 0.5 и 1.5." data-why="Фильтр берёт по четверти от 0, 4, 8 и 12. tex2D возвращает 6. Пишем его в output[0]."><span class="line-no" aria-hidden="true">12</span><span class="src">    output[0] = <span class="call">tex2D</span>&lt;float&gt;(texture, 1.0f, 1.0f);</span></span>
+<span class="source-line" data-what="Конец ядра sample." data-how="Поток уже записал одно число в output[0]." data-why="Дальше в листинге описано, как CPU подготавливает и запускает это ядро."><span class="line-no" aria-hidden="true">13</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">14</span><span class="src"></span></span>
+<span class="source-line" data-what="Старт программы на CPU." data-how="Здесь готовим данные и запускаем sample, а после запуска читаем ответ." data-why="Само чтение через texture идёт в ядре, не внутри main."><span class="line-no" aria-hidden="true">15</span><span class="src">int main() {</span></span>
+<span class="source-line code-section" data-what="Сначала готовим входные пиксели." data-how="Задаём четыре числа на CPU. Дальше выделим место на GPU и скопируем туда обе строки." data-why="К моменту запуска исходные значения уже должны лежать в CUDA-массиве."><span class="line-no" aria-hidden="true">16</span><span class="src">    <span class="comment">// Загрузить четыре значения в CUDA-массив.</span></span></span>
+<span class="source-line key" id="texture-point-reads" data-what="Задаём четыре числа на CPU." data-how="Первые два, [0, 4], — верхняя строка, следующие два, [8, 12], — нижняя." data-why="Массив pixels одномерный, но при 2D-копировании укажем, где начинается вторая строка."><span class="line-no" aria-hidden="true">17</span><span class="src">    const float pixels[4] = {0.0f, 4.0f, 8.0f, 12.0f};</span></span>
+<span class="source-line" data-what="Описываем одну ячейку, а не весь массив." data-how="Берём &lt;float&gt;, потому что в pixels одно число float на пиксель. cudaCreateChannelDesc делает описание «один float, 4 байта». Значения из pixels при этом не трогает." data-why="Передадим &amp;channel в cudaMallocArray, чтобы CUDA знала тип и размер ячейки. Числа 0, 4, 8, 12 скопируем отдельно."><span class="line-no" aria-hidden="true">18</span><span class="src">    <span class="call">cudaChannelFormatDesc</span> channel = <span class="call">cudaCreateChannelDesc</span>&lt;float&gt;();</span></span>
+<span class="source-line" data-what="Заводим переменную array для CUDA-массива." data-how="Пока массива нет, ставим nullptr. cudaMallocArray запишет дескриптор в array." data-why="По дескриптору функции CUDA найдут массив. Это не float*, поэтому array[i] здесь не работает."><span class="line-no" aria-hidden="true">19</span><span class="src">    <span class="call">cudaArray_t</span> array = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем место для четырёх пикселей на GPU." data-how="&amp;array — куда записать дескриптор.&#10;&amp;channel — где взять формат: один float на ячейку.&#10;2, 2 — число столбцов и строк, не байты." data-why="Место выделили. Теперь нужно записать в него числа отдельной копией."><span class="line-no" aria-hidden="true">20</span><span class="src">    check(<span class="call">cudaMallocArray</span>(&amp;array, &amp;channel, 2, 2));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">21</span><span class="src"></span></span>
+<span class="source-line" data-what="Копируем строки из pixels на CPU в array на GPU." data-how="array, 0, 0 — начинаем писать с байта 0 в строке 0.&#10;Читаем из pixels. Первое 2 * sizeof(float) — шаг (pitch): 8 байт между началами строк.&#10;Ширину, высоту и направление передаём следующей строкой." data-why="Из pixels[0] берём пару [0, 4], из pixels[2] — [8, 12]. Копируем исходные числа, ничего не усредняем."><span class="line-no" aria-hidden="true">22</span><span class="src">    check(<span class="call">cudaMemcpy2DToArray</span>(array, 0, 0, pixels, 2 * sizeof(float),</span></span>
+<span class="source-line" data-what="Задаём размер копии и направление." data-how="Второе 2 * sizeof(float) — по 8 байт из каждой строки. Следующее 2 — сколько строк взять. cudaMemcpyHostToDevice значит CPU → GPU." data-why="Шаг говорит, где начинается следующая строка. Ширина — сколько из неё взять. Если между строками оставить 4 байта, шаг будет 12, а ширина всё равно 8."><span class="line-no" aria-hidden="true">23</span><span class="src">                              2 * sizeof(float), 2, <span class="call">cudaMemcpyHostToDevice</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">24</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Пиксели уже загружены. Настраиваем чтение." data-how="Дальше указываем, какой массив взять и как обрабатывать координаты и значения." data-why="Те же четыре числа можно читать с фильтром или без него — копировать их заново не нужно."><span class="line-no" aria-hidden="true">25</span><span class="src">    <span class="comment">// Настроить линейное чтение.</span></span></span>
+<span class="source-line" data-what="Готовим описание источника: resource." data-how="Создаём структуру на CPU. Дальше скажем, что хранилище — CUDA-массив, и укажем, какой именно." data-why="При создании texture CUDA берёт массив из resource, а настройки фильтра — из description."><span class="line-no" aria-hidden="true">26</span><span class="src">    <span class="call">cudaResourceDesc</span> resource{};</span></span>
+<span class="source-line" data-what="Говорим CUDA, что источник — CUDA-массив." data-how="Мы выделили его через cudaMallocArray. При cudaResourceTypeArray CUDA возьмёт его дескриптор из res.array.array, а не указатель на обычный буфер float*." data-why="Эта строка выбирает только вид хранилища. Конкретный массив задаём ниже, фильтр — отдельно в description."><span class="line-no" aria-hidden="true">27</span><span class="src">    resource.resType = <span class="call">cudaResourceTypeArray</span>;</span></span>
+<span class="source-line" data-what="Указываем, какой именно массив читать." data-how="В res.array.array первое array — раздел для CUDA-массивов, второе — поле для дескриптора. В это поле пишем наш array." data-why="Настроили ссылку на массив, а не скопировали его. Пиксели 0, 4, 8, 12 остались на месте."><span class="line-no" aria-hidden="true">28</span><span class="src">    resource.res.array.array = array;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">29</span><span class="src"></span></span>
+<span class="source-line" data-what="Готовим настройки чтения: description." data-how="Ниже задаём, что делать за краем, в каком виде брать числа, как задавать координаты и каким фильтром читать." data-why="В resource указали, откуда читать. Тут указываем, как читать."><span class="line-no" aria-hidden="true">30</span><span class="src">    <span class="call">cudaTextureDesc</span> description{};</span></span>
+<span class="source-line" data-what="Ставим Clamp слева и справа." data-how="addressMode[0] — правило для X. Если уйти за край, берём крайний пиксель, не переходим на другой конец массива. Например, в (-1, 0.5) прочитаем 0." data-why="В (1, 1) все соседи внутри массива. Число 6 даёт линейный фильтр, Clamp тут ничего не меняет."><span class="line-no" aria-hidden="true">31</span><span class="src">    description.addressMode[0] = <span class="call">cudaAddressModeClamp</span>;</span></span>
+<span class="source-line" data-what="Ставим Clamp сверху и снизу." data-how="addressMode[1] — правило для Y. В (0.5, 3) точка ниже массива. Берём левый пиксель последней строки: 8." data-why="X и Y настраиваем отдельно. С Clamp по обеим осям запрос за краем остаётся на границе по той оси, по которой вышел."><span class="line-no" aria-hidden="true">32</span><span class="src">    description.addressMode[1] = <span class="call">cudaAddressModeClamp</span>;</span></span>
+<span class="source-line" data-what="Читаем числа в исходном типе." data-how="С cudaReadModeElementType фильтр получает исходные float: 0, 4, 8, 12. Для 8- и 16-битных целых есть другой режим: он может перевести их в нормированный float." data-why="Здесь числа менять не нужно. Эта настройка про значения пикселей, а не про координаты X и Y."><span class="line-no" aria-hidden="true">33</span><span class="src">    description.readMode = <span class="call">cudaReadModeElementType</span>;</span></span>
+<span class="source-line" data-what="Задаём координаты в пикселях." data-how="С normalizedCoords = 0 отсчитываем координаты в пикселях, а не в долях ширины и высоты. Центры здесь в 0.5 и 1.5 по обеим осям." data-why="Поэтому (0.5, 0.5) — центр ячейки с 0, а (1, 1) — середина между четырьмя центрами."><span class="line-no" aria-hidden="true">34</span><span class="src">    description.normalizedCoords = 0;  <span class="comment">// Центры ячеек: 0.5 и 1.5.</span></span></span>
+<span class="source-line key" id="texture-modes" data-what="Включаем линейный фильтр." data-how="В (1, 1) смешиваем соседей поровну. По X получаем (0 + 4) / 2 = 2 сверху и (8 + 12) / 2 = 10 снизу. По Y берём (2 + 10) / 2 = 6." data-why="Здесь у всех четырёх вес ¼. В другой точке веса меняются. Режим Point взял бы один пиксель. Число 6 возвращает tex2D, исходный массив не меняется."><span class="line-no" aria-hidden="true">35</span><span class="src">    description.filterMode = <span class="call">cudaFilterModeLinear</span>;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">36</span><span class="src"></span></span>
+<span class="source-line" data-what="Готовим переменную для идентификатора текстуры." data-how="Пока объекта нет, ставим 0. CUDA запишет идентификатор в texture на следующей строке." data-why="Ядру передаём texture: по нему CUDA найдёт массив и настройки чтения."><span class="line-no" aria-hidden="true">37</span><span class="src">    <span class="call">cudaTextureObject_t</span> texture = 0;</span></span>
+<span class="source-line key" id="texture-object" data-what="Создаём texture на CPU." data-how="&amp;texture — куда записать идентификатор.&#10;&amp;resource — какой массив читать.&#10;&amp;description — как читать: в том числе с Linear.&#10;nullptr — не просим менять представление массива." data-why="check проверяет статус вызова. Сам texture передадим ядру. CUDA связывает уже выделенный массив с настройками, не копируя числа."><span class="line-no" aria-hidden="true">38</span><span class="src">    check(<span class="call">cudaCreateTextureObject</span>(&amp;texture, &amp;resource, &amp;description, nullptr));</span></span>
+<span class="source-line" data-what="Готовим указатель на обычный выходной буфер GPU." data-how="Пока адреса нет, ставим nullptr. cudaMalloc запишет адрес в output." data-why="Это место для числа 6, а не сам CUDA-массив с пикселями."><span class="line-no" aria-hidden="true">39</span><span class="src">    float* output = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем место для одного результата." data-how="cudaMalloc получает sizeof(float) — 4 байта — и записывает адрес через &amp;output." data-why="tex2D вернёт одно число. Его можно записать в обычный буфер, без ещё одного CUDA-массива."><span class="line-no" aria-hidden="true">40</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;output, sizeof(float)));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">41</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Теперь читаем в центре массива." data-how="Массив заполнен, texture настроен, место под ответ есть." data-why="Осталось передать оба аргумента ядру."><span class="line-no" aria-hidden="true">42</span><span class="src">    <span class="comment">// Прочитать значение в центре массива.</span></span></span>
+<span class="source-line" data-what="Запускаем один блок с одним потоком." data-how="Передаём texture для чтения и output для записи. Единственный поток вызывает tex2D один раз." data-why="Фильтр сам учитывает четырёх соседей. Не нужно назначать отдельный поток каждому пикселю."><span class="line-no" aria-hidden="true">43</span><span class="src">    sample&lt;&lt;&lt;1, 1&gt;&gt;&gt;(texture, output);</span></span>
+<span class="source-line" data-what="Проверяем, удалось ли запустить ядро." data-how="cudaGetLastError даёт код ошибки запуска. Если она была, check остановит программу." data-why="Успех здесь ещё не означает, что GPU уже вычислил 6."><span class="line-no" aria-hidden="true">44</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line" data-what="Ждём, пока ядро закончит работу." data-how="cudaDeviceSynchronize ждёт работу GPU, а check проверяет, не было ли ошибки." data-why="Только после этого забираем готовый ответ и можем убрать texture."><span class="line-no" aria-hidden="true">45</span><span class="src">    check(<span class="call">cudaDeviceSynchronize</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">46</span><span class="src"></span></span>
+<span class="source-line" data-what="Готовим место для ответа на CPU." data-how="Создаём переменную host типа float. Начальный 0 заменит следующая копия." data-why="Её адрес &amp;host передаём как назначение."><span class="line-no" aria-hidden="true">47</span><span class="src">    float host = 0.0f;</span></span>
+<span class="source-line" data-what="Забираем с GPU одно число." data-how="Из output на GPU копируем в &amp;host на CPU. sizeof(host) — 4 байта. cudaMemcpyDeviceToHost задаёт направление GPU → CPU." data-why="Нужен ответ ядра, а не все четыре исходных пикселя. output — обычный указатель, поэтому здесь хватает cudaMemcpy."><span class="line-no" aria-hidden="true">48</span><span class="src">    check(<span class="call">cudaMemcpy</span>(&amp;host, output, sizeof(host), <span class="call">cudaMemcpyDeviceToHost</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">49</span><span class="src"></span></span>
+<span class="source-line" data-what="Эталон для проверки — 6." data-how="В точке между четырьмя центрами берём среднее исходных 0, 4, 8 и 12." data-why="Сравним то, что вернул GPU, с ответом, полученным вручную."><span class="line-no" aria-hidden="true">50</span><span class="src">    constexpr float expected = 6.0f;</span></span>
+<span class="source-line key" id="texture-check" data-what="Сравниваем число GPU с эталоном." data-how="host пришёл с GPU, expected посчитали на CPU. Здесь исходные числа и вес ¼ представляются точно." data-why="Для этих чисел хватает точного сравнения. От correct зависит PASS или FAIL."><span class="line-no" aria-hidden="true">51</span><span class="src">    bool correct = host == expected;</span></span>
+<span class="source-line" data-what="Печатаем фактический и ожидаемый ответы." data-how="Первое %.1f печатает host, второе — expected. Оба выводятся с одним знаком после точки." data-why="Если они отличаются, сразу видно, какое число вернул GPU."><span class="line-no" aria-hidden="true">52</span><span class="src">    std::printf(&quot;texture = %.1f, expected = %.1f\n&quot;, host, expected);</span></span>
+<span class="source-line" data-what="Отмечаем, прошла ли проверка." data-how="Если correct истинно, печатаем PASS, иначе FAIL." data-why="Статус относится к сравнению чисел, а не только к успешному запуску ядра."><span class="line-no" aria-hidden="true">53</span><span class="src">    std::puts(correct ? &quot;PASS&quot; : &quot;FAIL&quot;);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">54</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Убираем ресурсы, когда ответ уже на CPU." data-how="Буфер результата, объект texture и CUDA-массив были созданы отдельно." data-why="Поэтому у каждого свой вызов для освобождения."><span class="line-no" aria-hidden="true">55</span><span class="src">    <span class="comment">// Освободить объект и память.</span></span></span>
+<span class="source-line" data-what="Освобождаем обычный буфер ответа." data-how="output получили из cudaMalloc и возвращаем через cudaFree." data-why="Результат уже скопирован в host. CUDA-массив эта команда не трогает."><span class="line-no" aria-hidden="true">56</span><span class="src">    check(<span class="call">cudaFree</span>(output));</span></span>
+<span class="source-line" data-what="Удаляем texture после чтения." data-how="Передаём идентификатор texture, когда ядро уже закончило. Дальше этот идентификатор не используем." data-why="Это только объект чтения. Сам массив с пикселями освободим отдельно."><span class="line-no" aria-hidden="true">57</span><span class="src">    check(<span class="call">cudaDestroyTextureObject</span>(texture));</span></span>
+<span class="source-line" data-what="Освобождаем массив исходных пикселей." data-how="cudaFreeArray принимает array, полученный из cudaMallocArray." data-why="Объект чтения уже уничтожен. Массив не был выделен через cudaMalloc, поэтому cudaFree здесь не подходит."><span class="line-no" aria-hidden="true">58</span><span class="src">    check(<span class="call">cudaFreeArray</span>(array));</span></span>
+<span class="source-line" data-what="Возвращаем итог проверки системе." data-how="correct выбирает EXIT_SUCCESS при совпадении или EXIT_FAILURE при ошибке." data-why="Так результат можно проверить и по коду выхода, без чтения текста."><span class="line-no" aria-hidden="true">59</span><span class="src">    return correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Конец программы." data-how="main уже проверил ответ, освободил ресурсы и вернул статус." data-why="Все действия примера завершены."><span class="line-no" aria-hidden="true">60</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="texture-run-title">
+    <h2 id="texture-run-title">Запуск: получаем 6 между пикселями</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 08_texture.cu -o 08_texture
+./08_texture</code></pre>
+    <p>Вывод:</p>
+    <pre><code>texture = 6.0, expected = 6.0
+PASS</code></pre>
+    <p>Сравни <code>texture</code> с <code>expected</code>. Первое число вернул <code>tex2D</code>, второе посчитали по схеме: в центре берём по четверти от значения каждого пикселя. Оба числа равны 6 — получаем <code>PASS</code>.</p>
+
+    <details>
+      <summary>Почитать дальше: texture, фильтрация и кэш</summary>
+      <ul>
+        <li><a href="https://docs.nvidia.com/cuda/archive/13.0.1/cuda-c-programming-guide/index.html#texture-memory">NVIDIA CUDA C++ Programming Guide: Texture Memory</a> — как указать массив, что делать за краем и в каком виде читать числа.</li>
+        <li><a href="https://docs.nvidia.com/cuda/archive/13.0.1/cuda-c-programming-guide/index.html#texture-fetching">NVIDIA: Texture Fetching</a> — по рисункам и формулам видно, когда берём один пиксель, а когда смешиваем соседей по X и Y.</li>
+        <li><a href="https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__TEXTURE__OBJECT.html#texture-object-management">NVIDIA CUDA Runtime API: Texture Object Management</a> — что писать в <code>cudaResourceDesc</code> и <code>cudaTextureDesc</code> и что передать при создании текстуры.</li>
+        <li><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#texture-memory">NVIDIA CUDA C++ Best Practices Guide: Texture Memory</a> — чем кэшу помогают соседние адреса и почему меньше обращений к памяти не всегда означает меньшую задержку.</li>
+      </ul>
+    </details>
+  </section>
+</article>
+
+<article class="lesson-unit" id="surface">
+  <header>
+    <p class="kicker">Листинг 09 / Surface</p>
+    <h2>Surface: заполняем CUDA-массив четырьмя потоками</h2>
+    <p>Хотим записать в CUDA-массив две строки: <code>[6, 7]</code> и <code>[8, 9]</code>. К его ячейкам нельзя обратиться как к обычному массиву через <code>float*</code>. Поэтому создаём <code>surface</code> и передаём его ядру.</p>
+  </header>
+  <section class="flow" aria-labelledby="surface-flow-title">
+    <h3 id="surface-flow-title">Как поток находит свою ячейку</h3>
+    <p class="flow-intro">Запускаем один блок <code>dim3(2, 2)</code>: два потока по X и два по Y. Каждый берёт свой столбец из <code>threadIdx.x</code>, а строку — из <code>threadIdx.y</code>. Число для своей ячейки считает так: <code>6 + y * 2 + x</code>.</p>
+    <figure class="flow-figure" aria-labelledby="surface-figure-title">
+      <figcaption id="surface-figure-title">Каждый поток пишет в свою ячейку</figcaption>
+      <div class="diagram-grid">
+        <section class="diagram-panel" aria-labelledby="surface-buffer-title">
+          <h3 id="surface-buffer-title">Какое число пишет каждый поток</h3>
+          <div class="surface-path">
+            <div><code>(0, 0)</code> → <strong>6</strong> в ячейку (0, 0)</div>
+            <div><code>(1, 0)</code> → <strong>7</strong> в ячейку (1, 0)</div>
+            <div><code>(0, 1)</code> → <strong>8</strong> в ячейку (0, 1)</div>
+            <div><code>(1, 1)</code> → <strong>9</strong> в ячейку (1, 1)</div>
+          </div>
+        </section>
+        <section class="diagram-panel" aria-labelledby="surface-direct-title">
+          <h3 id="surface-direct-title">CUDA-массив после записи</h3>
+          <table class="surface-matrix" aria-label="Две строки: 6, 7 и 8, 9"><thead><tr><th scope="col">y / x</th><th scope="col">0</th><th scope="col">1</th></tr></thead><tbody><tr><th scope="row">0</th><td>6</td><td class="surface-target">7</td></tr><tr><th scope="row">1</th><td>8</td><td>9</td></tr></tbody></table>
+        </section>
+      </div>
+      <p class="figure-note" id="surface-coordinate-title">Поток <code>(1, 0)</code> пишет <strong>7</strong> во второй столбец строки 0. В <code>surf2Dwrite</code> передаём по X не номер столбца, а сколько байт пропустить: <code>1 × sizeof(float) = 4</code>. По Y передаём сам номер строки: <code>0</code>.</p>
+    </figure>
+  </section>
+  <section class="listing" aria-labelledby="surface-listing-title">
+    <div class="listing-header"><h2 id="surface-listing-title">Код: пишем числа 6, 7, 8 и 9</h2><div class="actions"><a href="09_surface.cu" download>Скачать .cu</a><button type="button" data-copy="surface-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div></div>
+    <div class="listing-grid">
+      <aside class="reading" aria-labelledby="surface-reading-title">
+        <h3 id="surface-reading-title">Как подключаем массив и читаем результат</h3>
+        <p><strong>Подключаем массив.</strong> Выделяем массив 2×2 по одному <code>float</code> на ячейку и разрешаем доступ через surface. В <code>resource</code> указываем этот массив. В <a href="#surface-object">строке 30</a> получаем идентификатор <code>surface</code>, который передадим ядру.</p>
+        <p><strong>Пишем число.</strong> В <a href="#surface-write">строке 16</a> <code>surf2Dwrite</code> находит массив по <code>surface</code>, а ячейку — по X в байтах и Y в строках. Число пишем в массив, не в сам объект <code>surface</code>.</p>
+        <p><strong>Проверяем результат.</strong> В <a href="#surface-copy">строке 39</a> копируем обе строки на CPU через <code>cudaMemcpy2DFromArray</code>. Посмотри на два <code>rowBytes</code>: первый — шаг до следующей строки в <code>host</code>, второй — сколько байт копируем из каждой строки. Здесь оба по 8 байт: по два <code>float</code> в строке, и строки лежат вплотную.</p>
+      </aside>
+      <figure class="code-frame" id="surface-code">
+  <figcaption>09_surface.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем CUDA Runtime." data-how="Заголовок объявляет команды и типы CUDA из листинга." data-why="Отсюда, например, компилятор узнаёт cudaArray_t и cudaMallocArray."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Подключаем вывод текста." data-how="Здесь объявлены printf, fprintf и puts." data-why="Ими печатаем ответ и сообщения об ошибках."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Подключаем функции завершения программы." data-how="Отсюда берутся std::exit, EXIT_SUCCESS и EXIT_FAILURE." data-why="Код выхода сообщает, удалось ли выполнить и проверить пример."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">4</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем один вызов CUDA." data-how="Передаём в check статус, который вернул этот вызов." data-why="Не продолжаем работу, если CUDA не смогла выполнить команду."><span class="line-no" aria-hidden="true">5</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Если ошибки нет, идём дальше." data-how="cudaSuccess — статус успеха. return выходит только из check." data-why="После успешной проверки выполняется следующая строка программы."><span class="line-no" aria-hidden="true">6</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печатаем, почему вызов не удался." data-how="cudaGetErrorString превращает статус в текст, fprintf отправляет его в stderr." data-why="Так видно сообщение CUDA, а не только код ошибки."><span class="line-no" aria-hidden="true">7</span><span class="src">    std::fprintf(stderr, &quot;%s\n&quot;, <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Останавливаем программу при ошибке CUDA." data-how="std::exit(EXIT_FAILURE) завершает всю программу, не только check." data-why="Дальше данные или объект могут быть не готовы."><span class="line-no" aria-hidden="true">8</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Конец check." data-how="На успехе функция уже вернулась. При ошибке она завершила программу." data-why="Основной код не продолжится после ошибки CUDA."><span class="line-no" aria-hidden="true">9</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">10</span><span class="src"></span></span>
+<span class="source-line" data-what="Задаём размер массива." data-how="W = 2 — число столбцов, H = 2 — число строк." data-why="Те же размеры используем для массива и для блока потоков: одна ячейка на поток."><span class="line-no" aria-hidden="true">11</span><span class="src">constexpr int W = 2, H = 2;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">12</span><span class="src"></span></span>
+<span class="source-line" data-what="В ядре будем писать через surface." data-how="cudaSurfaceObject_t — тип идентификатора. Создаём объект на CPU для конкретного CUDA-массива и передаём этот идентификатор ядру." data-why="Он нужен для surf2Dwrite. Обращаться к ячейкам CUDA-массива как к обычному float* нельзя."><span class="line-no" aria-hidden="true">13</span><span class="src"><span class="call">__global__</span> void writeSurface(<span class="call">cudaSurfaceObject_t</span> surface) {</span></span>
+<span class="source-line" data-what="Выбираем ячейку по номеру потока." data-how="threadIdx.x — столбец x, threadIdx.y — строка y. В блоке 2×2 каждый индекс равен 0 или 1." data-why="Блок один, поэтому одному потоку соответствует одна ячейка, без повторов."><span class="line-no" aria-hidden="true">14</span><span class="src">    int x = threadIdx.x, y = threadIdx.y;</span></span>
+<span class="source-line" data-what="Считаем число для своей ячейки." data-how="y * W + x — индекс, если посчитать ячейки по строкам. Для (1, 1) это 3, поэтому value = 6 + 3 = 9." data-why="Так получим разные числа: 6, 7, 8, 9. Адрес записи укажем в следующей команде."><span class="line-no" aria-hidden="true">15</span><span class="src">    float value = 6.0f + y * W + x;</span></span>
+<span class="source-line key" id="surface-write" data-what="Пишем число value в CUDA-массив." data-how="По surface CUDA находит массив.&#10;x * sizeof(float) — сколько байт пропустить от начала строки; y — номер строки." data-why="Поток (1, 0) пишет 7: в строке 0 пропускаем один float, то есть 4 байта. Если передать просто 1, это значит один байт, а не второй столбец."><span class="line-no" aria-hidden="true">16</span><span class="src">    <span class="call">surf2Dwrite</span>(value, surface, x * sizeof(float), y); <span class="comment">// X — байты, Y — строка.</span></span></span>
+<span class="source-line" data-what="Конец ядра writeSurface." data-how="Каждый поток уже выполнил свою запись через surf2Dwrite." data-why="Дальше в листинге описана подготовка и проверка на CPU."><span class="line-no" aria-hidden="true">17</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">18</span><span class="src"></span></span>
+<span class="source-line" data-what="Старт программы на CPU." data-how="Здесь выделяем массив, готовим surface, запускаем ядро и проверяем выход." data-why="Сами числа в массиве запишут потоки GPU."><span class="line-no" aria-hidden="true">19</span><span class="src">int main() {</span></span>
+<span class="source-line code-section" data-what="Готовим место для будущих записей." data-how="Ниже считаем размер строки, выбираем тип ячейки и выделяем массив." data-why="Массив нужно создать раньше, чем подключим к нему surface."><span class="line-no" aria-hidden="true">20</span><span class="src">    <span class="comment">// Подготовить CUDA-массив для записи.</span></span></span>
+<span class="source-line" data-what="Узнаём, сколько байт в одной строке." data-how="У нас W = 2, один float занимает 4 байта. В rowBytes пишем 8." data-why="На CPU строки лягут подряд: копируем по 8 байт и начинаем каждую следующую строку через 8 байт."><span class="line-no" aria-hidden="true">21</span><span class="src">    const size_t rowBytes = W * sizeof(float);</span></span>
+<span class="source-line" data-what="Описываем формат одной ячейки." data-how="Смотрим на value в ядре: пишем по одному float, то есть по 4 байта. cudaCreateChannelDesc возвращает это описание, а не сами числа." data-why="Передадим &amp;format в cudaMallocArray. Чтобы записать, например, 7, позже вызовем surf2Dwrite в ядре."><span class="line-no" aria-hidden="true">22</span><span class="src">    <span class="call">cudaChannelFormatDesc</span> format = <span class="call">cudaCreateChannelDesc</span>&lt;float&gt;();</span></span>
+<span class="source-line" data-what="Заводим переменную для CUDA-массива." data-how="Пока массива нет, ставим nullptr. Следующий вызов запишет его дескриптор в array." data-why="По нему подключим surface и потом скопируем строки на CPU."><span class="line-no" aria-hidden="true">23</span><span class="src">    <span class="call">cudaArray_t</span> array = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем CUDA-массив для записи через surface." data-how="&amp;array — куда записать дескриптор.&#10;&amp;format — формат одной ячейки, W и H — число столбцов и строк (2 и 2).&#10;cudaArraySurfaceLoadStore — флаг, который разрешает доступ через surface." data-why="Флаг указываем при выделении. Объект surface создадим отдельно, а числа запишет ядро."><span class="line-no" aria-hidden="true">24</span><span class="src">    check(<span class="call">cudaMallocArray</span>(&amp;array, &amp;format, W, H, <span class="call">cudaArraySurfaceLoadStore</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">25</span><span class="src"></span></span>
+<span class="source-line" data-what="Готовим resource: куда будет писать ядро." data-how="Создаём структуру на CPU. В следующих двух строках укажем тип хранилища и конкретный массив." data-why="cudaCreateSurfaceObject прочитает это описание. Числа 6, 7, 8, 9 будут лежать не здесь, а в массиве."><span class="line-no" aria-hidden="true">26</span><span class="src">    <span class="call">cudaResourceDesc</span> resource{};</span></span>
+<span class="source-line" data-what="Указываем вид хранилища: CUDA-массив." data-how="Мы выделили его через cudaMallocArray. По cudaResourceTypeArray функция cudaCreateSurfaceObject знает, что брать дескриптор из res.array.array." data-why="Обычный float* здесь не подходит. Разрешение на доступ дали при выделении, а конкретный массив укажем ниже."><span class="line-no" aria-hidden="true">27</span><span class="src">    resource.resType = <span class="call">cudaResourceTypeArray</span>;</span></span>
+<span class="source-line" data-what="Указываем, в какой массив писать." data-how="В res.array.array первое array — раздел для CUDA-массивов, второе — поле для дескриптора. В это поле пишем наш array." data-why="Теперь CUDA знает, с каким массивом связать surface. Сами числа в resource не хранятся."><span class="line-no" aria-hidden="true">28</span><span class="src">    resource.res.array.array = array;</span></span>
+<span class="source-line" data-what="Готовим переменную для идентификатора surface." data-how="Пока объекта нет, ставим 0. Следующий вызов запишет идентификатор в surface." data-why="Ядру достаточно получить одно это значение, чтобы знать, в какой массив писать."><span class="line-no" aria-hidden="true">29</span><span class="src">    <span class="call">cudaSurfaceObject_t</span> surface = 0;</span></span>
+<span class="source-line key" id="surface-object" data-what="Создаём surface на CPU." data-how="&amp;surface — куда записать идентификатор.&#10;&amp;resource — какой CUDA-массив подключить. Его уже выделили с разрешением на доступ через surface." data-why="check проверяет статус вызова. Ядру передадим surface, а числа оно запишет в массив."><span class="line-no" aria-hidden="true">30</span><span class="src">    check(<span class="call">cudaCreateSurfaceObject</span>(&amp;surface, &amp;resource));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">31</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Запускаем запись четырёх чисел." data-how="Мы выделили массив и связали его с surface. Передаём surface ядру." data-why="По одной записи на поток, и весь массив будет заполнен."><span class="line-no" aria-hidden="true">32</span><span class="src">    <span class="comment">// Записать четыре числа прямо в массив.</span></span></span>
+<span class="source-line" data-what="Запускаем один блок 2×2." data-how="1 — число блоков. dim3(W, H) даёт два потока по X, два по Y и один по Z. В ядро передаём surface." data-why="Индексы потока в этом блоке совпадают с координатами ячейки."><span class="line-no" aria-hidden="true">33</span><span class="src">    writeSurface&lt;&lt;&lt;1, dim3(W, H)&gt;&gt;&gt;(surface);</span></span>
+<span class="source-line" data-what="Проверяем запуск ядра." data-how="cudaGetLastError сообщает об ошибке запуска; check при ошибке завершит программу." data-why="Эта проверка не ждёт, пока потоки запишут результат."><span class="line-no" aria-hidden="true">34</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line" data-what="Ждём, пока GPU закончит записи." data-how="cudaDeviceSynchronize ждёт работу GPU. Если при выполнении была ошибка, check остановит программу." data-why="Не читаем массив, пока потоки в него пишут."><span class="line-no" aria-hidden="true">35</span><span class="src">    check(<span class="call">cudaDeviceSynchronize</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">36</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Переносим результат на CPU и сверяем числа." data-how="Ниже создаём приёмник, копируем туда две строки и сравниваем все ячейки с эталоном." data-why="Так проверяем то, что потоки действительно записали в CUDA-массив."><span class="line-no" aria-hidden="true">37</span><span class="src">    <span class="comment">// Прочитать и проверить результат на CPU.</span></span></span>
+<span class="source-line" data-what="Готовим обычный массив из четырёх float на CPU." data-how="В host[0] и host[1] попадёт первая строка, в host[2] и host[3] — вторая." data-why="Копия положит строки подряд, как две пары чисел."><span class="line-no" aria-hidden="true">38</span><span class="src">    float host[W * H]{};</span></span>
+<span class="source-line key" id="surface-copy" data-what="Копируем две строки из array на GPU в host на CPU." data-how="host — куда пишем. Первый rowBytes — шаг (pitch): 8 байт между началами строк в host.&#10;array — откуда читаем. 0, 0 значит: с байта 0 в строке 0.&#10;Размер и направление копии передаём следующей строкой." data-why="Первая пара [6, 7] попадёт в host[0] и host[1], вторая [8, 9] — в host[2] и host[3]. Читать CUDA-массив как обычный float* нельзя."><span class="line-no" aria-hidden="true">39</span><span class="src">    check(<span class="call">cudaMemcpy2DFromArray</span>(host, rowBytes, array, 0, 0,</span></span>
+<span class="source-line" data-what="Задаём размер копии и направление." data-how="Второй rowBytes = 8 — сколько байт читать из каждой строки array. H = 2 — сколько строк. cudaMemcpyDeviceToHost значит GPU → CPU." data-why="Если бы в host оставили 4 байта между строками, первый rowBytes был бы 12. Второй остался бы 8: копируем по два числа."><span class="line-no" aria-hidden="true">40</span><span class="src">                                rowBytes, H, <span class="call">cudaMemcpyDeviceToHost</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">41</span><span class="src"></span></span>
+<span class="source-line" data-what="Задаём эталон для проверки." data-how="Из формулы 6 + y * W + x получаются [6, 7] и [8, 9]. Записываем их в том же порядке, что и в host." data-why="Здесь четыре значения, с которыми сверим вывод GPU."><span class="line-no" aria-hidden="true">42</span><span class="src">    const float expected[W * H] = {6.0f, 7.0f, 8.0f, 9.0f};</span></span>
+<span class="source-line" data-what="Пока ошибок в данных не нашли." data-how="Начинаем с correct = true; дальше проверяем ячейки одну за другой." data-why="Любое несовпадение должно стать итоговым FAIL."><span class="line-no" aria-hidden="true">43</span><span class="src">    bool correct = true;</span></span>
+<span class="source-line key" id="surface-check" data-what="Проверяем каждую ячейку результата." data-how="Перебираем четыре индекса плоских массивов host и expected." data-why="Не ограничиваемся первым или последним числом."><span class="line-no" aria-hidden="true">44</span><span class="src">    for (int i = 0; i &lt; W * H; ++i) {</span></span>
+<span class="source-line" data-what="Сверяем число и запоминаем, были ли ошибки." data-how="correct остаётся true, только если host[i] совпал с expected[i] и прежние числа тоже совпали." data-why="Если одно число неверное, все остальные не смогут вернуть PASS."><span class="line-no" aria-hidden="true">45</span><span class="src">        correct = (host[i] == expected[i]) &amp;&amp; correct;</span></span>
+<span class="source-line" data-what="Конец цикла проверки." data-how="К этому месту сравнены все четыре ячейки." data-why="Теперь можно вывести итог."><span class="line-no" aria-hidden="true">46</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">47</span><span class="src"></span></span>
+<span class="source-line" data-what="Печатаем числа, которые пришли с GPU." data-how="host[0] и host[1] — первая строка, host[2] и host[3] — вторая. В выводе строки массива разделены точкой с запятой." data-why="Можно сверить запись 6 7; 8 9 с рисунком."><span class="line-no" aria-hidden="true">48</span><span class="src">    std::printf(&quot;surface: %g %g; %g %g\n&quot;, host[0], host[1], host[2], host[3]);</span></span>
+<span class="source-line" data-what="Печатаем результат проверки." data-how="PASS печатается только при совпадении всех четырёх чисел, иначе — FAIL." data-why="Это проверка результата записи, не только статуса запуска."><span class="line-no" aria-hidden="true">49</span><span class="src">    std::puts(correct ? &quot;PASS&quot; : &quot;FAIL&quot;);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">50</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Убираем объект и массив после проверки." data-how="Ядро закончило записи, строки уже скопированы на CPU." data-why="Больше ни одна команда не использует surface или array."><span class="line-no" aria-hidden="true">51</span><span class="src">    <span class="comment">// Освободить объект и массив.</span></span></span>
+<span class="source-line" data-what="Удаляем surface после записи." data-how="Передаём в cudaDestroySurfaceObject идентификатор surface. Дальше его не используем." data-why="Сам массив не удаляется: его освободим на следующей строке."><span class="line-no" aria-hidden="true">52</span><span class="src">    check(<span class="call">cudaDestroySurfaceObject</span>(surface));</span></span>
+<span class="source-line" data-what="Освобождаем CUDA-массив." data-how="Передаём array — дескриптор, который получили от cudaMallocArray." data-why="CUDA-массиву нужен cudaFreeArray. Обычный cudaFree освобождает буферы, созданные через cudaMalloc."><span class="line-no" aria-hidden="true">53</span><span class="src">    check(<span class="call">cudaFreeArray</span>(array));</span></span>
+<span class="source-line" data-what="Возвращаем итог проверки системе." data-how="При correct возвращаем EXIT_SUCCESS, иначе EXIT_FAILURE." data-why="Ненулевой код выхода показывает, что результат оказался неверным."><span class="line-no" aria-hidden="true">54</span><span class="src">    return correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Конец программы." data-how="Проверка закончена, объект и массив освобождены." data-why="main уже вернул статус."><span class="line-no" aria-hidden="true">55</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="surface-run-title">
+    <h2 id="surface-run-title">Запуск: проверяем все четыре ячейки</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 09_surface.cu -o 09_surface
+./09_surface</code></pre>
+    <p>Вывод:</p>
+    <pre><code>surface: 6 7; 8 9
+PASS</code></pre>
+    <p>Сверь с матрицей на схеме: до точки с запятой — верхняя строка, после — нижняя. Сверяем все четыре ячейки на CPU после копирования. <code>PASS</code> — каждое число на своём месте.</p>
+
+    <details>
+      <summary>Почитать дальше: CUDA-массивы и запись через surface</summary>
+      <ul>
+        <li><a href="https://docs.nvidia.com/cuda/archive/13.0.1/cuda-c-programming-guide/index.html#cuda-arrays">NVIDIA CUDA C++ Programming Guide: CUDA Arrays</a> — что лежит в одной ячейке CUDA-массива и чем такой массив отличается от обычного буфера.</li>
+        <li><a href="https://docs.nvidia.com/cuda/archive/13.0.1/cuda-c-programming-guide/index.html#surface-memory">NVIDIA: Surface Memory</a> — как связать массив с surface, читать и писать элементы и почему X задаётся в байтах.</li>
+        <li><a href="https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__SURFACE__OBJECT.html#surface-object-management">NVIDIA CUDA Runtime API: Surface Object Management</a> — что передать, чтобы создать surface для своего массива, и как потом удалить объект.</li>
+        <li><a href="https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__MEMORY.html">NVIDIA CUDA Runtime API: Memory Management</a> — найди <code>cudaMallocArray</code>, <code>cudaMemcpy2DToArray</code> и <code>cudaMemcpy2DFromArray</code>: как выделить массив, где начать копирование и чем шаг строки отличается от ширины копии.</li>
+      </ul>
+    </details>
+  </section>
+</article>
+  <nav class="lesson-nav" aria-label="Навигация лекции"><a href="index.html">← Все листинги лекции</a></nav>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script src="lesson.js"></script>
+</body>
+</html>

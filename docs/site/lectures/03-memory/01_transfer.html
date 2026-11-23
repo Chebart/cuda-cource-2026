@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Копируем массив с GPU на CPU: когда можно читать? · CUDA / Лекция 03</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #fcfcfb;
+      --paper: #fff;
+      --ink: #181420;
+      --muted: #574f63;
+      --line: #e8dfef;
+      --purple: #792ce6;
+      --purple-ink: #57209f;
+      --purple-wash: #f3eaff;
+      --code-bg: #201a29;
+      --code-ink: #f5eefb;
+      --code-muted: #c7b7d1;
+      --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+      font: clamp(18px, 1.15vw + 6px, 20px)/1.62 system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); }
+    main { width: min(1480px, calc(100% - clamp(28px, 6vw, 96px))); margin: auto; }
+    a { color: var(--purple-ink); text-underline-offset: .16em; }
+    a:hover { text-decoration-thickness: .12em; }
+    button { font: inherit; cursor: pointer; }
+    :focus-visible { outline: 3px solid var(--purple); outline-offset: 4px; }
+    :target { scroll-margin-top: 24px; }
+    code { font: max(18px, .91em)/1.4 var(--mono); overflow-wrap: anywhere; }
+    h1, h2, h3 { margin: 0; line-height: 1.13; letter-spacing: -.035em; text-wrap: balance; }
+    p { margin: 0; }
+    .kicker { margin-bottom: 14px; color: var(--purple-ink); font: 750 .83rem/1.4 var(--mono); letter-spacing: .05em; }
+    .hero { position: relative; isolation: isolate; padding: clamp(28px, 3.5vw, 50px) 0 clamp(28px, 3vw, 42px); overflow: hidden; }
+    .hero::before, .hero::after {
+      position: absolute; z-index: -1; pointer-events: none; content: '';
+      width: 340px; height: 170px; border: 1px solid #d4aefa; border-radius: 120px;
+      right: -152px; top: 45px; transform: rotate(-36deg);
+    }
+    .hero::after { right: -170px; top: 64px; }
+    h1 { max-width: 34ch; font-size: clamp(2.3rem, 5vw, 3.85rem); }
+    .lead { margin-top: 18px; max-width: 64ch; font-size: clamp(1rem, 1.3vw + 6px, 1.22rem); }
+    .flow { padding: clamp(16px, 3.2vw, 46px); border: 1px solid #b286ee; border-radius: clamp(14px, 2vw, 26px); background: var(--paper); }
+    .flow > h2, .listing-header h2 { font-size: clamp(1.8rem, 3.8vw, 2.9rem); }
+    .flow-intro { max-width: 72ch; margin-top: 12px; }
+    .timeline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: clamp(14px, 2vw, 28px); list-style: none; padding: 0; margin: 18px 0 0; }
+    .timeline > li { position: relative; display: grid; grid-row: span 3; grid-template-rows: subgrid; min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: #fcfafc; }
+    .timeline > li + li::before { position: absolute; left: calc(-1 * clamp(14px, 2vw, 28px)); top: 18px; width: clamp(14px, 2vw, 28px); text-align: center; line-height: 1; content: '→' / ''; color: var(--muted); }
+    .timeline h3, .timeline h4 { margin: 0; padding: 12px 15px; border-bottom: 1px solid var(--line); font-size: 1rem; line-height: 1.3; }
+    .timeline dl { display: grid; grid-row: span 2; grid-template-rows: subgrid; margin: 0; padding: 6px 7px; }
+    .lane { display: grid; grid-template-columns: 3.25em minmax(0, 1fr); align-items: baseline; align-content: start; gap: 6px 10px; padding: 8px; border-left: 3px solid transparent; }
+    .lane dt { color: var(--muted); font-weight: 750; }
+    .lane dd { margin: 0; overflow-wrap: anywhere; }
+    .lane dd strong { color: var(--purple-ink); }
+    .lane.wait { border-left-color: var(--purple); border-radius: 5px; background: var(--purple-wash); }
+    .lane a { color: var(--purple-ink); }
+    .flow-note { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); }
+    .listing { margin-top: clamp(44px, 6vw, 88px); }
+    .listing-header { display: flex; justify-content: space-between; gap: 14px 28px; flex-wrap: wrap; align-items: end; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+    .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .actions a, .actions button { padding: 7px 12px; min-height: 44px; border: 1px solid #c8a8ec; border-radius: 8px; color: var(--purple-ink); background: var(--paper); font-weight: 700; }
+    .actions a:hover, .actions button:hover { background: var(--purple-wash); }
+    .listing-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2.75fr); gap: clamp(26px, 4vw, 64px); align-items: start; padding: 28px 0 clamp(30px, 4.5vw, 65px); border-bottom: 1px solid var(--line); }
+    .reading { position: sticky; top: 24px; max-width: 36ch; overflow-wrap: anywhere; }
+    .reading h3 { margin-bottom: 12px; font-size: clamp(1.35rem, 2.4vw, 1.85rem); }
+    .reading p + p { margin-top: 12px; }
+    .reading .back { display: inline-block; margin-top: 14px; }
+    .code-frame { min-width: 0; margin: 0; color: var(--code-ink); background: var(--code-bg); border-radius: 13px; }
+    .code-frame figcaption { padding: 11px 18px; border-bottom: 1px solid #4d4057; color: var(--code-muted); font: 700 .85rem/1.35 var(--mono); }
+    .code-frame pre { margin: 0; padding: 13px 0 17px; white-space: pre-wrap; }
+    .code-frame code { display: block; font: 400 18px/1.6 var(--mono); white-space: normal; tab-size: 4; }
+    .source-line { display: grid; grid-template-columns: 3.55ch minmax(0, 1fr); column-gap: 12px; padding: 0 clamp(8px, 2vw, 21px); border-left: 4px solid transparent; scroll-margin-top: 30vh; }
+    .source-line.key { border-color: #d3aaff; }
+    .source-line:target { background: #483260; border-color: #e4c4ff; }
+    .line-no { text-align: right; user-select: none; color: var(--code-muted); font-size: .8em; line-height: 2; }
+    .src { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+    .comment { color: var(--code-muted); }
+    .code-section .comment { color: #dfc4ff; font-weight: 650; }
+    .call { color: #c3ebd8; }
+    .run { max-width: 70ch; padding: clamp(28px, 4vw, 52px) 0; }
+    .run h2 { font-size: clamp(1.55rem, 2.7vw, 2.2rem); margin-bottom: 12px; }
+    .run pre { padding: 12px 16px; background: #f1ebf6; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; white-space: nowrap; clip-path: inset(50%); }
+    .pool { margin-top: clamp(22px, 4vw, 56px); padding-top: clamp(28px, 5vw, 62px); border-top: 1px solid var(--line); }
+    .pool-header { margin-bottom: 24px; }
+    .pool-header h2 { font-size: clamp(1.8rem, 3.8vw, 2.9rem); }
+    .pool-header p:last-child { max-width: 64ch; margin-top: 10px; }
+    .pool .flow > h3, .pool .listing-header h3, .pool .run h3 { font-size: clamp(1.4rem, 3vw, 2.1rem); }
+    .pool .run h3 { margin-bottom: 12px; }
+    .pool .lane dt { font-size: .86rem; }
+
+    .tradeoff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; margin: 20px 0 0; }
+    .tradeoff > div { min-width: 0; border-left: 3px solid var(--purple); padding: 4px 0 4px 12px; }
+    .tradeoff > div + div { border-left-color: var(--line); }
+    .tradeoff dt { font-weight: 760; }
+    .tradeoff dd { margin: 5px 0 0; }
+    .hint-how { margin-top: 6px; font: 400 .9rem/1.4 system-ui, sans-serif; }
+    .hint-how:not([hidden]) { display: block; }
+    button.line-no { width: 100%; min-height: 28px; padding: 0 .18rem; border: 1px solid transparent; border-radius: 4px; background: transparent; text-align: right; font-family: inherit; }
+    button.line-no:hover, button.line-no:focus-visible, button.line-no[aria-pressed="true"] { color: var(--code-ink); background: #4b355d; border-color: #9172ac; }
+    button.line-no:focus-visible { outline-color: #e2bfff; outline-offset: 1px; }
+    .source-line.hint-active { background: #392a47; border-color: #d3aaff; }
+    .line-tip { position: fixed; z-index: 10; width: min(390px, calc(100vw - 20px)); max-height: calc(100dvh - 20px); overflow: auto; padding: 10px 13px; border: 1px solid #ac85d8; border-radius: 8px; background: var(--paper); color: var(--ink); box-shadow: 0 8px 28px #201a2930; font-size: .95rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .line-tip strong { color: var(--purple-ink); }
+    .line-tip dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; margin: 7px 0 0; }
+    .line-tip dt { font-weight: 750; color: var(--purple-ink); }
+    .line-tip dd { margin: 0; }
+    .flow-figure { margin: 26px 0 0; padding: clamp(14px, 2.1vw, 26px); border: 1px solid var(--line); border-radius: 13px; background: #faf7fc; }
+    .flow-figure figcaption { margin-bottom: 14px; font-size: 1.08rem; font-weight: 750; }
+    .figure-intro { margin: -5px 0 14px; }
+    .figure-note { margin-top: 14px; color: var(--muted); font-size: .94rem; }
+    .stream-visual {
+      display: grid;
+      grid-template-columns: [lane] 4.3em [start] minmax(0, 1fr) [submitted] minmax(0, 1fr) [waiting] minmax(0, 1fr) [ready] minmax(0, 1fr) [end];
+      gap: 8px 5px;
+    }
+    .time-axis { grid-area: 1 / start / 2 / end; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .86rem; }
+    .time-line { flex: 1; border-top: 1px solid #a296ae; }
+    .lane-label { grid-column: lane; font-weight: 760; align-self: center; }
+    .cpu-label { grid-row: 2; }
+    .cuda-label { grid-row: 3; }
+    .stream-bar { display: grid; place-items: center; min-width: 0; min-height: 46px; padding: 6px; border: 1px solid #d6c8df; border-radius: 6px; background: var(--paper); text-align: center; font-size: .92rem; line-height: 1.23; overflow-wrap: anywhere; }
+    .cpu-submit { grid-area: 2 / start / 3 / submitted; }
+    .cpu-work { grid-area: 2 / submitted / 3 / waiting; }
+    .cpu-wait { grid-area: 2 / waiting / 3 / ready; border-color: var(--purple); background: var(--purple-wash); font-weight: 750; }
+    .cpu-read { grid-area: 2 / ready / 3 / end; margin-left: 6px; }
+        .cuda-back { grid-area: 3 / submitted / 4 / ready; background: #f2eafa; }
+    .copy-done { grid-area: 3 / ready / 4 / end; margin-left: 6px; align-self: center; color: var(--muted); font-size: .86rem; line-height: 1.25; }
+    .sync-mark { grid-area: 2 / ready / 4 / end; width: 0; border-left: 2px solid var(--purple); }
+    .pool-states { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+    .pool-state { min-width: 0; }
+    .state-name { display: block; margin-bottom: 5px; font-weight: 750; }
+    .gpu-frame { padding: 9px; border: 1px solid #a296ae; border-radius: 7px; background: var(--paper); }
+    .gpu-frame > strong { display: block; margin-bottom: 5px; font-size: .92rem; }
+    .pool-frame { padding: 8px; border: 1px solid var(--purple); border-radius: 6px; background: #fcf8ff; }
+    .pool-frame > span { display: block; margin-bottom: 6px; font-size: .88rem; }
+    .pool-cells { display: grid; grid-template-columns: repeat(4, minmax(0, 42px)); gap: 5px; }
+    .pool-cell { display: grid; place-items: center; aspect-ratio: 1; border: 1px solid #aa9cb7; border-radius: 4px; background: var(--paper); color: var(--ink); font: 750 .95rem/1 var(--mono); }
+    .pool-cell.issued { border: 2px solid var(--purple); background: var(--purple-wash); }
+    .gpu-outside { margin-top: 6px; color: var(--muted); font-size: .83rem; }
+    .pool-key { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: .88rem; }
+    .pool-key > span { display: inline-flex; align-items: center; gap: 6px; }
+    .pool-key .pool-cell { width: 23px; font-size: .7rem; }
+    @media (max-width: 730px) {
+      .stream-visual { grid-template-columns: [start] minmax(0, 1fr) [submitted] minmax(0, 1fr) [waiting] minmax(0, 1fr) [ready] minmax(0, 1fr) [end]; }
+      .lane-label { grid-column: start / end; }
+      .cpu-submit, .cpu-work, .cpu-wait, .cpu-read { grid-row: 3; }
+      .cuda-label { grid-row: 4; }
+      .cuda-back, .copy-done { grid-row: 5; }
+      .sync-mark { grid-row: 3 / 6; }
+      .stream-bar { padding-inline: 2px; font-size: .82rem; }
+      .cpu-read, .copy-done { margin-left: 3px; }
+      .copy-done { font-size: .8rem; }
+      .pool-states { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+    }
+    @media (max-width: 1050px) {
+      .listing-grid { grid-template-columns: minmax(0, 1fr); }
+      .reading { position: static; max-width: 68ch; }
+      .lane { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+    }
+    @media (max-width: 730px) {
+      .tradeoff { grid-template-columns: minmax(0, 1fr); }
+      .hero::before, .hero::after { opacity: .45; }
+      .timeline { grid-template-columns: minmax(0, 1fr); row-gap: 15px; }
+      .timeline > li { grid-row: auto; grid-template-rows: auto auto; }
+      .timeline dl { grid-row: auto; grid-template-rows: auto auto; }
+      .timeline > li + li::before { content: '↓' / ''; inset: -15px auto auto 20px; }
+      .lane { grid-template-columns: 3.1em minmax(0, 1fr); }
+      .source-line { grid-template-columns: 2.75ch minmax(0, 1fr); column-gap: 7px; }
+    }
+  </style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Примеры 01–02</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#flow">Схема копирования</a>
+    <a href="#listing">Код копирования</a>
+    <a href="#pool-title">Пул памяти</a>
+  </nav>
+  <header class="hero">
+    <p class="kicker">CUDA / Лекция 03 / Листинг 01</p>
+    <h1>Копируем массив с GPU на CPU: когда можно читать?</h1>
+    <p class="lead">На GPU лежит массив <code>[2, 4, 6, 8]</code>. Хотим забрать его на CPU. Ставим копирование в очередь и не ждём сразу: разберём, в какой момент числа можно прочитать.</p>
+  </header>
+
+  <section class="flow" id="flow" aria-labelledby="flow-title">
+    <h2 id="flow-title">От запуска копирования до чтения массива</h2>
+    <p class="flow-intro">Сначала копируем массив на GPU и ждём, пока он туда попадёт. Затем создаём <strong>очередь</strong> (<code>stream</code>). В неё ставим только копирование обратно: с GPU в RAM.</p>
+    <ol class="timeline">
+      <li><h3>1. Просим скопировать</h3><dl><div class="lane"><dt>CPU</dt><dd>Просит <a href="#async-copy">скопировать массив</a> с GPU в RAM.</dd></div><div class="lane"><dt>CUDA</dt><dd>Выполняет копию из очереди.</dd></div></dl></li>
+      <li><h3>2. Не ждём сразу</h3><dl><div class="lane"><dt>CPU</dt><dd>Может работать с другими данными.</dd></div><div class="lane"><dt>CUDA</dt><dd>Массив ещё может копироваться.</dd></div></dl></li>
+      <li><h3>3. Читаем результат</h3><dl><div class="lane wait"><dt>CPU</dt><dd><a href="#wait-copy">Ждёт конца копирования</a>, затем читает результат.</dd></div><div class="lane"><dt>CUDA</dt><dd>Массив уже в RAM.</dd></div></dl></li>
+    </ol>
+    <figure class="flow-figure" aria-labelledby="stream-figure-title">
+      <figcaption id="stream-figure-title">Что делает CPU, пока идёт копия</figcaption>
+      <p class="figure-intro">Сверху — что делает CPU, снизу — что в это время происходит с копией. Время идёт слева направо.</p>
+      <div class="stream-visual">
+        <div class="time-axis" aria-hidden="true">Время <span class="time-line"></span>→</div>
+        <strong class="lane-label cpu-label">CPU</strong>
+        <div class="stream-bar cpu-submit">Ставит в очередь</div>
+        <div class="stream-bar cpu-work">Другая работа</div>
+        <div class="stream-bar cpu-wait">Ждёт</div>
+        <div class="stream-bar cpu-read">Читает</div>
+        <strong class="lane-label cuda-label">CUDA</strong>
+        <div class="stream-bar cuda-back">Копирует GPU → RAM</div>
+        <div class="copy-done">Копия готова</div>
+        <span class="sync-mark" aria-hidden="true"></span>
+      </div>
+      <p class="figure-note">Пока копия идёт, CPU может работать с другими данными. В коде на этом месте только комментарий: одновременную работу здесь не измеряем. Черта на схеме — момент, когда CPU закончил ждать и может читать массив.</p>
+    </figure>
+    <p class="flow-note">Если вызвать <code>cudaMemcpy</code> для копии с GPU на CPU, вызов сам дождётся результата. Здесь берём <code>cudaMemcpyAsync</code> с закреплённым буфером: решаем сами, когда подождать.</p>
+    <dl class="tradeoff">
+      <div><dt>Что выигрываем</dt><dd>Пока массив копируется, CPU может, например, подготовить следующий массив в другом буфере.</dd></div>
+      <div><dt>Где ждать</dt><dd>Ждём до того, как читать результат или освобождать буфер, в который копируем.</dd></div>
+    </dl>
+  </section>
+
+  <section class="listing" id="listing" aria-labelledby="listing-title">
+    <header class="listing-header">
+      <h2 id="listing-title">Код: ставим копирование с GPU в очередь</h2>
+      <div class="actions"><a href="01_transfer.cu" download>Скачать .cu</a><button data-copy="transfer-code" type="button" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div>
+    </header>
+    <div class="listing-grid">
+      <aside class="reading" aria-labelledby="reading-title">
+        <h3 id="reading-title">Готовим буфер, копируем и ждём</h3>
+        <p><a href="#pinned">Строка 22</a>: через <code>cudaMallocHost</code> выделяем закреплённый буфер для результата. Его страницы остаются в RAM.</p>
+        <p><a href="#async-copy">Строка 26</a>: ставим в очередь копирование из <code>device</code> в <code>output</code>.</p>
+        <p><a href="#wait-copy">Строка 29</a>: после ожидания можно читать <code>output</code>.</p>
+        <a class="back" href="#flow">↑ К схеме CPU / CUDA</a>
+      </aside>
+      <figure class="code-frame" id="transfer-code">
+        <figcaption>01_transfer.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+        <!-- The source below mirrors 01_transfer.cu verbatim. -->
+        <pre><code><span class="source-line" data-what="Подключаем заголовок CUDA Runtime." data-how="В нём объявлены функции и типы CUDA, которые вызываем с CPU." data-why="Он нужен для выделения памяти, копирования и работы с очередью."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Заголовок C++ для вывода текста и чисел." data-how="Объявляет printf и fprintf." data-why="Печатаем массив и, если нужно, сообщение об ошибке."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Подключаем стандартный заголовок C++." data-how="В нём объявлены std::exit, EXIT_SUCCESS и EXIT_FAILURE." data-why="По коду завершения видно, удалась ли программа."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">4</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Если вызов не удался, дальше с памятью не работаем."><span class="line-no" aria-hidden="true">5</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Программа продолжит работу со строки после вызова check."><span class="line-no" aria-hidden="true">6</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печатаем причину ошибки в stderr, отдельно от результата." data-how="cudaGetErrorString превращает код CUDA в понятный текст." data-why="Так можно понять, например, не удалось выделить память или скопировать данные."><span class="line-no" aria-hidden="true">7</span><span class="src">    std::fprintf(stderr, &quot;%s\n&quot;, <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Останавливаем программу из-за ошибки." data-how="std::exit передаёт системе ненулевой код завершения." data-why="Не пытаемся работать с памятью после неудачного вызова CUDA."><span class="line-no" aria-hidden="true">8</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Конец функции check." data-how="Закрывает тело функции проверки." data-why="Дальше начинается main."><span class="line-no" aria-hidden="true">9</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">10</span><span class="src"></span></span>
+<span class="source-line" data-what="Начинаем программу на CPU." data-how="CPU выполняет команды по порядку, но работа CUDA может ещё идти." data-why="Здесь видно, как отправляем массив на GPU и получаем его обратно."><span class="line-no" aria-hidden="true">11</span><span class="src">int main() {</span></span>
+<span class="source-line code-section" data-what="Подготовка исходных данных." data-how="Загружаем массив в память видеокарты." data-why="К началу демонстрации данные уже лежат на GPU."><span class="line-no" aria-hidden="true">12</span><span class="src">    <span class="comment">// Загрузить исходный массив на GPU.</span></span></span>
+<span class="source-line" data-what="Четыре исходных числа в RAM." data-how="CPU создаёт обычный массив int." data-why="Эти же числа должны вернуться после копии."><span class="line-no" aria-hidden="true">13</span><span class="src">    const int input[] = {2, 4, 6, 8};</span></span>
+<span class="source-line" data-what="Указатель на память видеокарты." data-how="Пока адреса нет — ставим nullptr. cudaMalloc запишет адрес в device." data-why="Адрес понадобится обеим копиям."><span class="line-no" aria-hidden="true">14</span><span class="src">    int* device = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем память на GPU." data-how="&amp;device — куда записать адрес. sizeof(input) — размер всего массива, здесь 16 байт." data-why="Готовим место для четырёх чисел."><span class="line-no" aria-hidden="true">15</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;device, sizeof(input)));</span></span>
+<span class="source-line" data-what="Загрузка массива на GPU." data-how="Копируем из input в device." data-why="Готовим источник для обратной копии."><span class="line-no" aria-hidden="true">16</span><span class="src">    check(<span class="call">cudaMemcpy</span>(device, input, sizeof(input), <span class="call">cudaMemcpyHostToDevice</span>));</span></span>
+<span class="source-line" data-what="Ждём, пока данные попадут на GPU." data-how="cudaDeviceSynchronize ждёт всю работу, которую уже отправили на GPU." data-why="К началу примера с очередью исходный массив уже на GPU."><span class="line-no" aria-hidden="true">17</span><span class="src">    check(<span class="call">cudaDeviceSynchronize</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">18</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Готовим место для результата и очередь." data-how="Выделим буфер на CPU и создадим stream." data-why="И буфер, и очередь передадим в cudaMemcpyAsync."><span class="line-no" aria-hidden="true">19</span><span class="src">    <span class="comment">// Подготовить приёмник и очередь команд.</span></span></span>
+<span class="source-line" data-what="Указатель на будущий результат в RAM." data-how="cudaMallocHost запишет сюда адрес буфера в RAM." data-why="После ожидания CPU прочитает массив по этому адресу."><span class="line-no" aria-hidden="true">20</span><span class="src">    int* output = nullptr;</span></span>
+<span class="source-line" data-what="Заводим переменную для очереди CUDA." data-how="cudaStreamCreate запишет в stream её идентификатор (дескриптор)." data-why="Поставим копию в эту очередь и её же дождёмся."><span class="line-no" aria-hidden="true">21</span><span class="src">    <span class="call">cudaStream_t</span> stream;</span></span>
+<span class="source-line key" id="pinned" data-what="Выделяем закреплённый буфер в RAM." data-how="Размер берём из sizeof(input), адрес получаем в output. Система не выгружает страницы этого буфера из RAM, поэтому GPU может передавать данные в него напрямую." data-why="Так можно поставить копию GPU → CPU в очередь и не ждать её в самом вызове. После ожидания освободим буфер через cudaFreeHost."><span class="line-no" aria-hidden="true">22</span><span class="src">    check(<span class="call">cudaMallocHost</span>(&amp;output, sizeof(input)));</span></span>
+<span class="source-line" data-what="Создаём очередь команд CUDA." data-how="&amp;stream — адрес переменной, куда CUDA запишет дескриптор очереди." data-why="Поставим в неё обратную копию и потом дождёмся её завершения."><span class="line-no" aria-hidden="true">23</span><span class="src">    check(<span class="call">cudaStreamCreate</span>(&amp;stream));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">24</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Ставим обратную копию в очередь." data-how="В cudaMemcpyAsync передаём адреса, размер, направление и очередь." data-why="CPU сможет продолжить работу до окончания копии."><span class="line-no" aria-hidden="true">25</span><span class="src">    <span class="comment">// Поставить копию GPU → RAM в очередь.</span></span></span>
+<span class="source-line key" id="async-copy" data-what="Запрашиваем обратную копию." data-how="Из device на GPU копируем в output на CPU. sizeof(input) — 16 байт, потому что в массиве четыре int." data-why="То, что поставили копию в очередь, ещё не значит, что её можно читать."><span class="line-no" aria-hidden="true">26</span><span class="src">    check(<span class="call">cudaMemcpyAsync</span>(output, device, sizeof(input),</span></span>
+<span class="source-line" data-what="Задаём направление и очередь." data-how="cudaMemcpyDeviceToHost задаёт GPU → CPU; stream указывает, в какую очередь поставить перенос." data-why="Дальше ждём работу в этом stream, а не на всём GPU."><span class="line-no" aria-hidden="true">27</span><span class="src">                          <span class="call">cudaMemcpyDeviceToHost</span>, stream));</span></span>
+<span class="source-line code-section" data-what="Место для независимой работы CPU." data-how="CPU может обрабатывать другие данные, пока идёт перенос." data-why="Результат читаем после ожидания."><span class="line-no" aria-hidden="true">28</span><span class="src">    <span class="comment">// Здесь CPU может работать с другими данными.</span></span></span>
+<span class="source-line key" id="wait-copy" data-what="Ждём, пока копия закончится." data-how="cudaStreamSynchronize ждёт команды, которые уже поставили в этот stream. Если вызов удался, копия готова." data-why="Теперь можем читать output. Пока копия идёт, этот буфер не трогаем."><span class="line-no" aria-hidden="true">29</span><span class="src">    check(<span class="call">cudaStreamSynchronize</span>(stream));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">30</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Чтение уже готовых данных." data-how="Ожидание обратной копии уже завершилось." data-why="Теперь можно печатать и проверять массив."><span class="line-no" aria-hidden="true">31</span><span class="src">    <span class="comment">// Прочитать результат после ожидания.</span></span></span>
+<span class="source-line" data-what="Печатаем четыре числа из output." data-how="CPU читает output[0]…output[3]." data-why="Видим, что вернулось с GPU."><span class="line-no" aria-hidden="true">32</span><span class="src">    std::printf(&quot;[%d, %d, %d, %d]\n&quot;, output[0], output[1], output[2], output[3]);</span></span>
+<span class="source-line" data-what="Заводим флаг для проверки." data-how="Сначала ставим true. Если найдём отличие, поставим false." data-why="Код завершения сообщит, прошла ли проверка."><span class="line-no" aria-hidden="true">33</span><span class="src">    bool correct = true;</span></span>
+<span class="source-line" data-what="Цикл проверки результата." data-how="Сравниваем четыре пары элементов." data-why="Проверяем содержимое целиком."><span class="line-no" aria-hidden="true">34</span><span class="src">    for (int i = 0; i &lt; 4; ++i) {</span></span>
+<span class="source-line" data-what="Проверяем число с индексом i." data-how="Сравниваем output[i] с input[i]." data-why="Достаточно одного отличия, чтобы проверка не прошла."><span class="line-no" aria-hidden="true">35</span><span class="src">        if (output[i] != input[i]) correct = false;</span></span>
+<span class="source-line" data-what="Конец тела цикла проверки." data-how="Следующая итерация проверит следующий элемент, если i &lt; 4." data-why="После цикла correct хранит итог всех сравнений."><span class="line-no" aria-hidden="true">36</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">37</span><span class="src"></span></span>
+<span class="source-line" data-what="Удаляем очередь после копии." data-how="Передаём в cudaStreamDestroy ту же очередь, которую ждали." data-why="Этим вызовом буферы не освобождаем."><span class="line-no" aria-hidden="true">38</span><span class="src">    check(<span class="call">cudaStreamDestroy</span>(stream));</span></span>
+<span class="source-line" data-what="Освобождение закреплённой памяти." data-how="cudaFreeHost освобождает буфер output, выделенный cudaMallocHost." data-why="CPU уже прочитал результат."><span class="line-no" aria-hidden="true">39</span><span class="src">    check(<span class="call">cudaFreeHost</span>(output));</span></span>
+<span class="source-line" data-what="Освобождение участка памяти видеокарты." data-how="cudaFree принимает указатель, ранее выданный cudaMalloc." data-why="Возвращаем память GPU, когда она больше не нужна."><span class="line-no" aria-hidden="true">40</span><span class="src">    check(<span class="call">cudaFree</span>(device));</span></span>
+<span class="source-line" data-what="Код завершения программы." data-how="Если все числа совпали, возвращаем EXIT_SUCCESS, иначе EXIT_FAILURE." data-why="Так результат можно проверить по коду завершения, а не только по напечатанным числам."><span class="line-no" aria-hidden="true">41</span><span class="src">    return correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Конец функции main." data-how="Закрывает тело основной функции." data-why="Выполнение программы завершено."><span class="line-no" aria-hidden="true">42</span><span class="src">}</span></span></code></pre>
+      </figure>
+    </div>
+  </section>
+
+  <section class="run" id="run" aria-labelledby="run-title">
+    <h2 id="run-title">Запуск: массив вернулся на CPU</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 01_transfer.cu -o transfer
+./transfer</code></pre>
+    <p>Вывод:</p>
+    <pre><code>[2, 4, 6, 8]</code></pre>
+    <p>После <code>cudaStreamSynchronize</code> печатаем числа из <code>output</code>. Сверь их с <code>input</code>: все четыре числа вернулись в том же порядке.</p>
+  </section>
+
+  <section class="pool" aria-labelledby="pool-title">
+    <header class="pool-header">
+      <p class="kicker">Листинг 02</p>
+      <h2 id="pool-title">Пул памяти GPU: что остаётся после возврата буфера?</h2>
+      <p>Дважды берём у пула буфер на 1 МиБ и возвращаем его. Хотим увидеть, останется ли свободная память у пула и хватит ли её на второй запрос.</p>
+    </header>
+
+    <section class="flow" aria-labelledby="pool-flow-title">
+      <h3 id="pool-flow-title">Буфер вернули, а пул может оставить память</h3>
+      <p class="flow-intro"><code>used</code> — сколько памяти сейчас занимают выданные буферы. <code>reserved</code> — сколько памяти держит пул целиком: и выданной, и свободной.</p>
+      <figure class="flow-figure" aria-labelledby="pool-figure-title">
+        <figcaption id="pool-figure-title">Откуда пул берёт память для второго буфера?</figcaption>
+        <p class="figure-intro">Внешняя рамка — вся память GPU. Внутри — память, которую держит пул. Смотрим, что в ней занято на каждом шаге.</p>
+        <ol class="pool-states">
+          <li class="pool-state">
+            <span class="state-name">1. Выдали буфер A</span>
+            <div class="gpu-frame">
+              <strong>Память GPU</strong>
+              <div class="pool-frame">
+                <span>Резерв пула</span>
+                <div class="pool-cells" aria-hidden="true"><span class="pool-cell issued">A</span><span class="pool-cell"></span><span class="pool-cell"></span><span class="pool-cell"></span></div>
+              </div>
+              <p class="gpu-outside">Остальная память GPU</p>
+            </div>
+          </li>
+          <li class="pool-state">
+            <span class="state-name">2. Освободили A</span>
+            <div class="gpu-frame">
+              <strong>Память GPU</strong>
+              <div class="pool-frame">
+                <span>Тот же резерв пула</span>
+                <div class="pool-cells" aria-hidden="true"><span class="pool-cell"></span><span class="pool-cell"></span><span class="pool-cell"></span><span class="pool-cell"></span></div>
+              </div>
+              <p class="gpu-outside">Остальная память GPU</p>
+            </div>
+          </li>
+          <li class="pool-state">
+            <span class="state-name">3. Выдали буфер B</span>
+            <div class="gpu-frame">
+              <strong>Память GPU</strong>
+              <div class="pool-frame">
+                <span>Тот же резерв пула</span>
+                <div class="pool-cells" aria-hidden="true"><span class="pool-cell issued">B</span><span class="pool-cell"></span><span class="pool-cell"></span><span class="pool-cell"></span></div>
+              </div>
+              <p class="gpu-outside">Остальная память GPU</p>
+            </div>
+          </li>
+        </ol>
+        <div class="pool-key"><span><i class="pool-cell issued" aria-hidden="true">A</i> Выданный буфер</span><span><i class="pool-cell" aria-hidden="true"></i> Свободное место в пуле</span></div>
+        <p class="figure-note">Квадраты показывают, что в пуле занято, а что свободно. Размеры и адреса буферов схема не показывает.</p>
+      </figure>
+      <dl class="tradeoff">
+        <div><dt>Что выигрываем</dt><dd>Когда нужен новый буфер, пул может взять память из резерва и не запрашивать её заново.</dd></div>
+        <div><dt>Чем платим</dt><dd>Свободный резерв по-прежнему занимает память GPU.</dd></div>
+      </dl>
+    </section>
+
+    <section class="listing" aria-labelledby="pool-listing-title">
+      <header class="listing-header">
+        <h3 id="pool-listing-title">Код: два запроса к одному пулу</h3>
+        <div class="actions"><a href="02_pool.cu" download>Скачать .cu</a><button data-copy="pool-code" type="button" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div>
+      </header>
+      <div class="listing-grid">
+        <aside class="reading" aria-labelledby="pool-reading-title">
+          <h3 id="pool-reading-title">Когда читаем used и reserved</h3>
+          <p>Ставим высокий порог (<a href="#pool-threshold">строка 30</a>), чтобы пул сохранял свободную память, когда ждём очередь. Эта настройка сама память не выделяет.</p>
+          <p>Берём буфер на <strong>1 МиБ</strong> (<a href="#pool-alloc">строка 42</a>) и возвращаем его (<a href="#pool-free">строка 46</a>). После каждого шага ждём, а потом читаем счётчики.</p>
+          <p>Сначала <code>print_pool_usage</code> печатает оба числа до первого запроса. С ними сравниваем показания после выделения и возврата.</p>
+        </aside>
+        <figure class="code-frame" id="pool-code">
+          <figcaption>02_pool.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+          <!-- The source below mirrors 02_pool.cu verbatim. -->
+          <pre><code><span class="source-line" data-what="Заголовок CUDA Runtime — библиотеки, через которую CPU управляет памятью и очередями на GPU." data-how="В нём объявлены функции для выделения памяти, настройки пула и работы с очередью." data-why="Подключаем его, чтобы вызвать эти функции из программы на CPU."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок для 64-битных чисел." data-how="Предоставляет uint64_t и макрос PRIu64." data-why="Число байтов может быть большим, поэтому берём 64-битный счётчик."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cinttypes&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок для печати." data-how="Объявляет printf и fprintf." data-why="Печатаем значения счётчиков и ошибки."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок для выхода из программы." data-how="Объявляет exit и EXIT_FAILURE." data-why="По коду завершения оболочка узнает, что вызов CUDA не удался."><span class="line-no" aria-hidden="true">4</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок с пределами числовых типов." data-how="В нём есть numeric_limits: через него узнаём наибольшее число для нужного типа." data-why="Берём это число для порога возврата памяти."><span class="line-no" aria-hidden="true">5</span><span class="src">#include &lt;limits&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">6</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Если вызов не удался, печатаем причину и выходим."><span class="line-no" aria-hidden="true">7</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Продолжаем со строки после вызова check."><span class="line-no" aria-hidden="true">8</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печатаем причину ошибки." data-how="cudaGetErrorString даёт текст ошибки, а fprintf пишет его в stderr." data-why="Так можно понять, например, не поддерживается ли вызов или просто не хватило памяти."><span class="line-no" aria-hidden="true">9</span><span class="src">    std::fprintf(stderr, &quot;%s\n&quot;, <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Выход при ошибке." data-how="Останавливает процесс с ненулевым кодом." data-why="Код ошибки сообщает оболочке, что опыт прервался."><span class="line-no" aria-hidden="true">10</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Конец функции check." data-how="Закрывает тело функции проверки." data-why="Дальше печатаем состояние пула."><span class="line-no" aria-hidden="true">11</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">12</span><span class="src"></span></span>
+<span class="source-line" data-what="Печатаем состояние пула." data-how="Передаём тот же pool и подпись: до запроса, после выделения или после освобождения." data-why="Так можно сравнить показания одного пула в разные моменты."><span class="line-no" aria-hidden="true">13</span><span class="src">void print_pool_usage(cudaMemPool_t pool, const char* label) {</span></span>
+<span class="source-line" data-what="Готовим два счётчика: used и reserved." data-how="Оба в байтах. Следующими вызовами запишем в них показания пула." data-why="used — сколько заняли выданные буферы. reserved — сколько памяти держит весь пул."><span class="line-no" aria-hidden="true">14</span><span class="src">    std::uint64_t used = 0, reserved = 0;</span></span>
+<span class="source-line" data-what="Узнаём, сколько байтов занято буферами." data-how="Передаём pool и атрибут cudaMemPoolAttrUsedMemCurrent. Ответ CUDA записывает в used." data-why="Когда вернём единственный буфер, здесь увидим ноль."><span class="line-no" aria-hidden="true">15</span><span class="src">    check(<span class="call">cudaMemPoolGetAttribute</span>(pool, <span class="call">cudaMemPoolAttrUsedMemCurrent</span>, &amp;used));</span></span>
+<span class="source-line" data-what="Узнаём, сколько байтов держит пул." data-how="По атрибуту cudaMemPoolAttrReservedMemCurrent CUDA запишет в reserved весь резерв: и выданное, и свободное." data-why="Если used упал, а reserved нет, пул оставил память для следующих запросов."><span class="line-no" aria-hidden="true">16</span><span class="src">    check(<span class="call">cudaMemPoolGetAttribute</span>(pool, <span class="call">cudaMemPoolAttrReservedMemCurrent</span>, &amp;reserved));</span></span>
+<span class="source-line" data-what="Печатаем подпись и два счётчика." data-how="PRIu64 подставляет нужную часть формата для uint64_t. Компилятор склеивает её с соседним текстом, с уже написанным знаком процента." data-why="Печатаем число байтов целиком, не сужая 64-битное значение."><span class="line-no" aria-hidden="true">17</span><span class="src">    std::printf(&quot;%s: used=%&quot; PRIu64 &quot; B, reserved=%&quot; PRIu64 &quot; B\n&quot;,</span></span>
+<span class="source-line" data-what="Передаём в printf то, что хотим напечатать." data-how="Сначала label, потом числа used и reserved — в порядке, заданном форматом выше." data-why="По подписи видно, когда прочитали счётчики."><span class="line-no" aria-hidden="true">18</span><span class="src">                label, used, reserved);</span></span>
+<span class="source-line" data-what="Конец print_pool_usage." data-how="Закрывает функцию печати." data-why="Дальше начинается main."><span class="line-no" aria-hidden="true">19</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">20</span><span class="src"></span></span>
+<span class="source-line" data-what="Начинаем программу на CPU." data-how="Настроим пул и дважды попросим одинаковый буфер." data-why="Хотим увидеть, понадобится ли пулу больше памяти во второй раз."><span class="line-no" aria-hidden="true">21</span><span class="src">int main() {</span></span>
+<span class="source-line code-section" data-what="Готовим пул к двум запросам." data-how="Берём пул текущего GPU и задаём, сколько резерва он будет стараться сохранить." data-why="Оба буфера будем брать из этого пула."><span class="line-no" aria-hidden="true">22</span><span class="src">    <span class="comment">// Настроить пул для двух запросов.</span></span></span>
+<span class="source-line" data-what="Переменная для номера устройства." data-how="Начальное значение перезапишет следующий вызов." data-why="Номер устройства нужен для получения его пула."><span class="line-no" aria-hidden="true">23</span><span class="src">    int device = 0;</span></span>
+<span class="source-line" data-what="Запрос номера текущего GPU." data-how="CUDA записывает номер выбранного устройства в device." data-why="Берём пул того GPU, на котором будем выделять буфер."><span class="line-no" aria-hidden="true">24</span><span class="src">    check(<span class="call">cudaGetDevice</span>(&amp;device));</span></span>
+<span class="source-line" data-what="Заводим переменную для пула." data-how="cudaDeviceGetMemPool запишет сюда дескриптор. Это идентификатор пула, не адрес его памяти." data-why="По нему CUDA поймёт, у какого пула спрашивать счётчики и менять порог."><span class="line-no" aria-hidden="true">25</span><span class="src">    <span class="call">cudaMemPool_t</span> pool;</span></span>
+<span class="source-line" data-what="Получаем текущий пул выбранного GPU." data-how="device — номер GPU, &amp;pool — куда записать дескриптор. Из этого пула cudaMallocAsync берёт память для очередей этого GPU." data-why="Читаем счётчики именно у того пула, который выдаёт нам буфер."><span class="line-no" aria-hidden="true">26</span><span class="src">    check(<span class="call">cudaDeviceGetMemPool</span>(&amp;pool, device));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">27</span><span class="src"></span></span>
+<span class="source-line" data-what="Просим пул оставить память у себя." data-how="Для этого задаём высокий порог возврата." data-why="Хотим, чтобы после первого запроса свободное место пригодилось для второго."><span class="line-no" aria-hidden="true">28</span><span class="src"><span class="comment">    // Просим пул сохранять свободный резерв при ожидании.</span></span></span>
+<span class="source-line" data-what="Берём самое большое значение порога в байтах." data-how="max() даёт наибольшее число, которое помещается в uint64_t." data-why="Мы не просим столько памяти. Просто при ожидании резерв не окажется выше этого порога."><span class="line-no" aria-hidden="true">29</span><span class="src">    auto threshold = std::numeric_limits&lt;std::uint64_t&gt;::max();</span></span>
+<span class="source-line key" id="pool-threshold" data-what="Настраиваем возврат памяти из пула." data-how="cudaMemPoolAttrReleaseThreshold задаёт, сколько памяти пул старается держать. Когда ждём очередь, он может вернуть свободную память сверх порога." data-why="Высокий порог помогает сохранить резерв между запросами. Сам вызов память не выделяет и не ограничивает размеры буферов."><span class="line-no" aria-hidden="true">30</span><span class="src">    check(<span class="call">cudaMemPoolSetAttribute</span>(pool, <span class="call">cudaMemPoolAttrReleaseThreshold</span>,</span></span>
+<span class="source-line" data-what="Передаём порог в настройку пула." data-how="cudaMemPoolSetAttribute ждёт адрес значения, поэтому передаём &amp;threshold." data-why="Применяем высокий порог, который посчитали выше."><span class="line-no" aria-hidden="true">31</span><span class="src">                                  &amp;threshold));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">32</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Начало двух проходов с буфером." data-how="Ниже создаём очередь и повторяем выделение и освобождение." data-why="Сравниваем резерв при первом и повторном запросе."><span class="line-no" aria-hidden="true">33</span><span class="src">    <span class="comment">// Дважды взять и вернуть буфер.</span></span></span>
+<span class="source-line" data-what="Заводим переменную для очереди CUDA." data-how="Ниже cudaStreamCreate запишет в stream её дескриптор." data-why="Выделение и освобождение пойдут через одну очередь."><span class="line-no" aria-hidden="true">34</span><span class="src">    <span class="call">cudaStream_t</span> stream;</span></span>
+<span class="source-line" data-what="Создаём одну очередь на оба прохода." data-how="&amp;stream — куда CUDA запишет дескриптор. Создаём очередь до цикла." data-why="И выделение, и освобождение в обоих проходах пойдут через неё."><span class="line-no" aria-hidden="true">35</span><span class="src">    check(<span class="call">cudaStreamCreate</span>(&amp;stream));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">36</span><span class="src"></span></span>
+<span class="source-line" data-what="Смотрим, что было в пуле до первого запроса." data-how="Читаем used и reserved до первого cudaMallocAsync." data-why="Начинаем сравнение с этих чисел: пул мог уже держать память."><span class="line-no" aria-hidden="true">37</span><span class="src">    print_pool_usage(pool, "before first alloc");</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">38</span><span class="src"></span></span>
+<span class="source-line" data-what="Два одинаковых прохода." data-how="В каждом просим 1 МиБ, снимаем счётчики и возвращаем буфер." data-why="Можно увидеть, вырос ли резерв на втором запросе."><span class="line-no" aria-hidden="true">39</span><span class="src">    for (int pass = 1; pass &lt;= 2; ++pass) {</span></span>
+<span class="source-line" data-what="Указатель на буфер прохода." data-how="cudaMallocAsync на следующем шаге запишет в него адрес." data-why="По этому адресу программа потом вернёт буфер пулу."><span class="line-no" aria-hidden="true">40</span><span class="src">        void* buffer = nullptr;</span></span>
+<span class="source-line" data-what="Печать номера прохода." data-how="Отмечает начало очередной пары снимков." data-why="Легко сравнить первый запрос со вторым."><span class="line-no" aria-hidden="true">41</span><span class="src">        std::printf(&quot;Pass %d\n&quot;, pass);</span></span>
+<span class="source-line key" id="pool-alloc" data-what="Просим у пула буфер на 1 МиБ." data-how="cudaMallocAsync пишет адрес в buffer, а выделение ставит в stream. Если мы сразу поставим туда команду с этим буфером, она пойдёт после выделения." data-why="CPU ждёт дальше только ради показаний счётчиков. Между командами одной очереди отдельное ожидание не нужно."><span class="line-no" aria-hidden="true">42</span><span class="src">        check(<span class="call">cudaMallocAsync</span>(&amp;buffer, 1024 * 1024, stream));</span></span>
+<span class="source-line" data-what="Ждём, пока пул выделит буфер." data-how="cudaStreamSynchronize ждёт команды, которые поставили в stream." data-why="Только теперь читаем счётчики после выделения."><span class="line-no" aria-hidden="true">43</span><span class="src">        check(<span class="call">cudaStreamSynchronize</span>(stream));</span></span>
+<span class="source-line" data-what="Смотрим, что изменилось после выделения." data-how="После ожидания читаем used и reserved." data-why="Видно, сколько занял буфер и вырос ли весь резерв."><span class="line-no" aria-hidden="true">44</span><span class="src">        print_pool_usage(pool, "after alloc");</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">45</span><span class="src"></span></span>
+<span class="source-line key" id="pool-free" data-what="Ставим возврат буфера в очередь." data-how="cudaFreeAsync вернёт buffer после более ранних команд в stream. Тогда буфер перестанет занимать место в used." data-why="Память может остаться в reserved, и пул сможет выдать её снова."><span class="line-no" aria-hidden="true">46</span><span class="src">        check(<span class="call">cudaFreeAsync</span>(buffer, stream));</span></span>
+<span class="source-line" data-what="Ждём, пока буфер вернётся в пул." data-how="После успешного ожидания буфер уже возвращён пулу." data-why="Хотим прочитать used уже после освобождения."><span class="line-no" aria-hidden="true">47</span><span class="src">        check(<span class="call">cudaStreamSynchronize</span>(stream));</span></span>
+<span class="source-line" data-what="Смотрим, что осталось у пула." data-how="После ожидания снова читаем used и reserved." data-why="В этом примере used снова равен нулю. По reserved видно, оставил ли пул память у себя."><span class="line-no" aria-hidden="true">48</span><span class="src">        print_pool_usage(pool, "after free");</span></span>
+<span class="source-line" data-what="Конец тела цикла." data-how="После первого прохода будет второй; после второго цикл закончится." data-why="Получаем две пары снимков для сравнения."><span class="line-no" aria-hidden="true">49</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">50</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Закончили оба прохода." data-how="Ниже удалим stream." data-why="Больше команд в эту очередь не ставим."><span class="line-no" aria-hidden="true">51</span><span class="src">    <span class="comment">// Удалить очередь.</span></span></span>
+<span class="source-line" data-what="Удаляем очередь." data-how="Передаём в cudaStreamDestroy тот же stream, где всё уже выполнено." data-why="Очередь больше не нужна."><span class="line-no" aria-hidden="true">52</span><span class="src">    check(<span class="call">cudaStreamDestroy</span>(stream));</span></span>
+<span class="source-line" data-what="Конец функции main." data-how="Достижение конца main без return означает успешное завершение." data-why="При ошибке CUDA функция check завершила бы программу раньше."><span class="line-no" aria-hidden="true">53</span><span class="src">}</span></span></code></pre>
+        </figure>
+      </div>
+    </section>
+
+    <section class="run" aria-labelledby="pool-run-title">
+      <h3 id="pool-run-title">Запуск: хватило ли резерва на второй буфер?</h3>
+      <p>Нужны CUDA Toolkit 11.2+ и GPU с поддержкой пулов памяти.</p>
+      <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 02_pool.cu -o pool
+./pool</code></pre>
+      <p>Пример вывода на Quadro RTX 6000:</p>
+      <pre><code>before first alloc: used=0 B, reserved=0 B
+Pass 1
+after alloc: used=1048576 B, reserved=33554432 B
+after free: used=0 B, reserved=33554432 B
+Pass 2
+after alloc: used=1048576 B, reserved=33554432 B
+after free: used=0 B, reserved=33554432 B</code></pre>
+      <p>Сначала посмотри на <code>before first alloc</code>: порог уже задали, а оба счётчика по нулям. В первом <code>after alloc</code> буфер занял <strong>1 МиБ</strong> (<code>used</code>), а пул зарезервировал <strong>32 МиБ</strong> (<code>reserved</code>). В первом <code>after free</code> снова <code>used=0</code>: буфер вернули, а <code>reserved</code> остался 32 МиБ.</p>
+      <p>Теперь сравни <code>reserved</code> в двух строках <code>after alloc</code>: оба раза 32 МиБ. Пулу хватило резерва на второй буфер.</p>
+    </section>
+  </section>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script>
+  const tip = document.getElementById('line-tip');
+  const tipTitle = tip.querySelector('strong');
+  const tipFields = Array.from(tip.querySelectorAll('[data-field]'), field => ({
+    field, key: field.dataset.field, label: field.previousElementSibling.textContent
+  }));
+  let visible = null;
+  let pinned = null;
+  let hoverTimer;
+
+  function positionTip() {
+    if (!visible) return;
+    const row = visible.closest('.source-line').getBoundingClientRect();
+    if (row.bottom <= 0 || row.top >= innerHeight) {
+      tip.hidden = true;
+      return;
+    }
+    tip.hidden = false;
+    const {width, height} = tip.getBoundingClientRect();
+    const gap = 10;
+    const canFitLeft = row.left >= width + 2 * gap;
+    const left = canFitLeft ? row.left - width - gap : row.left + gap;
+    const top = canFitLeft ? row.top : row.top >= height + 2 * gap ?
+      row.top - height - gap : row.bottom + gap;
+    tip.style.left = `${Math.max(gap, Math.min(left, innerWidth - width - gap))}px`;
+    tip.style.top = `${Math.max(gap, Math.min(top, innerHeight - height - gap))}px`;
+  }
+
+  function hideTip() {
+    clearTimeout(hoverTimer);
+    if (visible) visible.closest('.source-line').classList.remove('hint-active');
+    visible = null;
+    tip.hidden = true;
+  }
+
+  function showTip(button) {
+    hideTip();
+    visible = button;
+    const row = button.closest('.source-line');
+    row.classList.add('hint-active');
+    tipTitle.textContent = `Строка ${button.textContent}`;
+    for (const {field, key} of tipFields) field.textContent = row.dataset[key];
+    positionTip();
+  }
+
+  function clearPin() {
+    if (pinned) pinned.setAttribute('aria-pressed', 'false');
+    pinned = null;
+  }
+
+  for (const listing of document.querySelectorAll('.code-frame')) {
+    const help = listing.querySelector('.hint-how');
+    help.hidden = false;
+    const group = [];
+    for (const row of listing.querySelectorAll('[data-what]')) {
+      const number = row.querySelector('.line-no');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'line-no';
+      button.dataset.lineNote = '';
+      button.textContent = number.textContent;
+      button.tabIndex = group.length === 0 ? 0 : -1;
+      button.setAttribute('aria-label', `Пояснение к строке ${number.textContent}`);
+      button.setAttribute('aria-pressed', 'false');
+      const description = document.createElement('span');
+      description.className = 'sr-only';
+      description.id = `${listing.id}-note-${number.textContent}`;
+      description.textContent = tipFields.map(({key, label}) => `${label}: ${row.dataset[key]}`).join(' ');
+      button.setAttribute('aria-describedby', description.id);
+      listing.append(description);
+      number.replaceWith(button);
+      group.push(button);
+    }
+    const select = button => group.forEach(item => { item.tabIndex = item === button ? 0 : -1; });
+    for (const [index, button] of group.entries()) {
+      button.addEventListener('pointerenter', event => {
+        if (event.pointerType !== 'touch') showTip(button);
+      });
+      button.addEventListener('pointerleave', () => {
+        if (visible !== button || pinned === button || button.matches(':focus-visible')) return;
+        hoverTimer = setTimeout(() => pinned ? showTip(pinned) : hideTip(), 160);
+      });
+      button.addEventListener('focus', () => {
+        select(button);
+        if (button.matches(':focus-visible')) showTip(button);
+      });
+      button.addEventListener('blur', () => {
+        if (pinned === button) clearPin();
+        if (visible === button) hideTip();
+      });
+      button.addEventListener('click', () => {
+        if (pinned === button) {
+          clearPin();
+          hideTip();
+          return;
+        }
+        clearPin();
+        pinned = button;
+        button.setAttribute('aria-pressed', 'true');
+        showTip(button);
+      });
+      button.addEventListener('keydown', event => {
+        const dest = {ArrowUp: index - 1, ArrowDown: index + 1, Home: 0, End: group.length - 1}[event.key];
+        if (dest === undefined) return;
+        event.preventDefault();
+        group[Math.max(0, Math.min(group.length - 1, dest))].focus();
+      });
+    }
+  }
+
+  tip.addEventListener('pointerenter', () => clearTimeout(hoverTimer));
+  tip.addEventListener('pointerleave', event => {
+    if (!pinned && !visible?.matches(':focus-visible') && !event.relatedTarget?.closest?.('[data-line-note]')) hideTip();
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!event.target.closest('[data-line-note]') && !tip.contains(event.target)) {
+      clearPin();
+      hideTip();
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && visible) {
+      clearPin();
+      hideTip();
+    }
+  });
+  window.addEventListener('resize', positionTip);
+  window.addEventListener('scroll', positionTip, {passive: true});
+
+  for (const button of document.querySelectorAll('[data-copy]')) {
+    const listing = document.getElementById(button.dataset.copy);
+    const status = button.parentElement.querySelector('[role="status"]');
+    button.hidden = false;
+    button.addEventListener('click', async () => {
+      const source = Array.from(listing.querySelectorAll('.src'), line => line.textContent).join('\n') + '\n';
+      try {
+        await navigator.clipboard.writeText(source);
+        button.textContent = status.textContent = 'Код скопирован';
+      } catch {
+        button.textContent = status.textContent = 'Не получилось скопировать. Скачай .cu';
+      }
+    });
+  }
+</script>
+</body>
+</html>

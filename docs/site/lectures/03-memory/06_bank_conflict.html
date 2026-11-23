@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Конфликт банков: зачем добавлять пустой столбец? · CUDA / Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+<style>
+  #banks code, .banks-hero code { font-size: 18px; }
+  #banks .diagram-panel table { width: 100%; font-size: 18px; }
+  #banks .figure-note { font-size: 18px; }
+</style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Пример 06</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#banks-flow-title">Схема</a>
+    <a href="#banks-listing-title">Код</a>
+    <a href="#banks-run-title">Запуск</a>
+  </nav>
+<header class="hero banks-hero">
+  <p class="kicker">CUDA / Лекция 03 / Листинг 06</p>
+  <h1>Конфликт банков: зачем добавлять пустой столбец?</h1>
+  <p class="lead">Читаем первый столбец тайла 32×32 (куска матрицы) из shared memory. Хотим получить <code>[0, 32, 64, …, 992]</code> в обеих версиях. Во второй добавим по пустой ячейке в конец строки: числа не поменяются, но будут лежать по другим адресам.</p>
+</header>
+<article class="lesson-unit" id="banks">
+  <section class="flow" aria-labelledby="banks-flow-title">
+    <h2 id="banks-flow-title">Заполняем строки, читаем первый столбец</h2>
+    <figure class="flow-figure" aria-labelledby="banks-figure-title">
+      <figcaption id="banks-figure-title">Один тайл, 32 потока с номерами lane от 0 до 31</figcaption>
+      <ol class="timeline">
+        <li><h3>1. Заполняем 32 строки</h3><p class="step-copy">В первом тайле числа от 0 до 1023. За один шаг заполняем одну строку: поток <code>lane</code> пишет в <code>tile[row][lane]</code>.</p></li>
+        <li><h3>2. Ждём у барьера</h3><p class="step-copy">Через <code>__syncthreads()</code> ждём, пока все потоки закончат запись. Только потом читаем тайл.</p></li>
+        <li><h3>3. Читаем столбец 0</h3><p class="step-copy">Поток <code>lane</code> берёт первое число из своей строки: <code>tile[lane][0]</code>.</p></li>
+      </ol>
+      <p class="figure-note">Shared memory разбита на 32 банка. Разные банки могут работать одновременно. Соседние 4-байтные слова идут в банки 0, 1, …, 31, потом снова в банк 0. На схеме считаем слова от начала тайла: берём смещение в словах и находим остаток от деления на 32. Это номер банка, не число в ячейке.</p>
+      <div class="diagram-grid">
+        <section class="diagram-panel" aria-labelledby="banks-a-title">
+          <h3 id="banks-a-title">WIDTH = 32: все ячейки заняты числами</h3>
+          <p><code>tile[32][32]</code> · шаг <strong>32 слова</strong></p>
+          <table>
+            <caption>Первые два потока читают из одного банка</caption>
+            <thead><tr><th scope="col">lane</th><th scope="col">Смещение, слов</th><th scope="col">Банк</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">0</th><td><strong>0</strong></td><td>0</td></tr>
+              <tr><th scope="row">1</th><td><strong>32</strong></td><td>0</td></tr>
+            </tbody>
+          </table>
+          <p>У остальных потоков так же: все <strong>32 разных слова попали в один банк</strong>. Читаем их по очереди.</p>
+        </section>
+        <section class="diagram-panel" aria-labelledby="banks-b-title">
+          <h3 id="banks-b-title">WIDTH = 33: последнюю ячейку не трогаем</h3>
+          <p><code>tile[32][33]</code> · шаг <strong>33 слова</strong></p>
+          <table>
+            <caption>Первые два потока читают из разных банков</caption>
+            <thead><tr><th scope="col">lane</th><th scope="col">Смещение, слов</th><th scope="col">Банк</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">0</th><td><strong>0</strong></td><td>0</td></tr>
+              <tr><th scope="row">1</th><td><strong>33</strong></td><td>1</td></tr>
+            </tbody>
+          </table>
+          <p>У каждого из 32 потоков свой банк. Теперь банки могут читать одновременно — конфликта нет.</p>
+        </section>
+      </div>
+      <p class="figure-note">При ширине 33 поток 1 читает то же число <strong>32</strong>, но теперь оно лежит в слове <strong>33</strong>. За лишнюю ячейку в каждой из 32 строк платим 128 байтами shared memory на блок.</p>
+    </figure>
+    <p class="flow-note"><a href="bank-demo.html#bank-demo">Открой схему с переключателем</a>. Нажми на номер строки 10 и переключи ширину на <code>32 + 1</code>. Посмотри, как меняются банки при чтении.</p>
+  </section>
+  <section class="listing" aria-labelledby="banks-listing-title">
+    <header class="listing-header"><h2 id="banks-listing-title">Код: читаем столбец при ширине 32 и 33</h2><div class="actions"><a href="06_bank_conflict.cu" download>Скачать .cu</a><button type="button" data-copy="banks-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div></header>
+    <div class="listing-grid">
+      <aside class="reading" aria-labelledby="banks-reading-title">
+        <h3 id="banks-reading-title">Что делает каждый блок</h3>
+        <p><a href="#banks-write">Строка 20</a>: соседние потоки пишут в соседние ячейки строки. Каждый блок читает свой кусок входа.</p>
+        <p><a href="#banks-barrier">Строка 22</a>: первый столбец заполняет поток 0, а читают его все. Барьер не даёт прочитать число до записи.</p>
+        <p><a href="#banks-read">Строка 24</a>: каждый поток берёт первое число своей строки. Читаем тот же столбец, но при шаге 33 вместо 32 числа попадают в другие банки.</p>
+      </aside>
+      <figure class="code-frame" id="banks-code">
+  <figcaption>06_bank_conflict.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем заголовок CUDA Runtime." data-how="В нём объявлены функции для работы с памятью, событиями и ошибками." data-why="Они нужны, чтобы подготовить данные и замерить работу ядра."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Вывод результата." data-how="Объявляет std::printf и std::fprintf." data-why="Печатаем время, ответы и ошибки."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Завершение программы." data-how="Объявляет std::exit и коды завершения." data-why="Сбой не должен выглядеть как успешная проверка."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line" data-what="Подключаем функции для работы со строками." data-how="Берём из этого заголовка std::strcmp." data-why="Режим одного тайла включается явно."><span class="line-no" aria-hidden="true">4</span><span class="src">#include &lt;cstring&gt;</span></span>
+<span class="source-line" data-what="Массивы на CPU." data-how="std::vector хранит элементы подряд; data() даёт указатель на начало." data-why="Удобно выделить большие буферы вне стека."><span class="line-no" aria-hidden="true">5</span><span class="src">#include &lt;vector&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">6</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Не продолжаем замер после ошибки."><span class="line-no" aria-hidden="true">7</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Если нет, следующие строки напечатают ошибку."><span class="line-no" aria-hidden="true">8</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печать ошибки CUDA." data-how="cudaGetErrorString переводит статус в текст." data-why="Видно, почему программа остановилась."><span class="line-no" aria-hidden="true">9</span><span class="src">    std::fprintf(stderr, "%s\n", <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Остановка с ошибкой." data-how="Возвращаем оболочке код неудачи." data-why="Не продолжаем замер после сбоя."><span class="line-no" aria-hidden="true">10</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Закончили check." data-how="При ошибке программа уже остановилась. Без ошибки вышли через return." data-why="Дальше — ядро для обеих ширин тайла."><span class="line-no" aria-hidden="true">11</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">12</span><span class="src"></span></span>
+<span class="source-line" data-what="Готовим два ядра с разной шириной." data-how="WIDTH — параметр шаблона. Компилятор отдельно собирает read_column&lt;32&gt; и read_column&lt;33&gt; и в каждом заранее знает размер tile." data-why="Код один и тот же. Меняем только шаг между строками в shared memory."><span class="line-no" aria-hidden="true">13</span><span class="src">template&lt;int WIDTH&gt;</span></span>
+<span class="source-line" data-what="Из каждого тайла берём первый столбец." data-how="На GPU передаём input и output. Каждый блок читает свой тайл и пишет свой столбец." data-why="Один блок показывает, как это работает. Для замера повторяем работу на 1024 тайлах."><span class="line-no" aria-hidden="true">14</span><span class="src"><span class="call">__global__</span> void read_column(const float* input, float* output) {</span></span>
+<span class="source-line" data-what="Выделяем массив tile в shared memory блока." data-how="В каждой из 32 строк пишем в ячейки 0…31. При WIDTH = 33 ячейку 32 не трогаем." data-why="Этот пустой столбец (padding) меняет шаг между началами строк с 32 до 33 слов."><span class="line-no" aria-hidden="true">15</span><span class="src">    <span class="call">__shared__</span> float tile[32][WIDTH];</span></span>
+<span class="source-line" data-what="Берём номер потока в блоке." data-how="Здесь весь блок — один warp. У его потоков номера lane от 0 до 31." data-why="При записи lane — номер столбца, при чтении — номер строки."><span class="line-no" aria-hidden="true">16</span><span class="src">    const int lane = <span class="call">threadIdx</span>.x;</span></span>
+<span class="source-line" data-what="Находим начало тайла во входном массиве." data-how="На каждый блок приходится 32 × 32 числа. Например, блок 1 начинает с input[1024]." data-why="Блоки читают разные куски входа. Лишний столбец есть только в shared memory."><span class="line-no" aria-hidden="true">17</span><span class="src">    const int base = <span class="call">blockIdx</span>.x * 32 * 32;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">18</span><span class="src"></span></span>
+<span class="source-line" data-what="Заполняем тайл строка за строкой." data-how="На каждом шаге все потоки работают с одним row. Каждый пишет в свой столбец lane." data-why="За этот шаг соседние потоки пишут в соседние ячейки."><span class="line-no" aria-hidden="true">19</span><span class="src">    for (int row = 0; row &lt; 32; ++row)</span></span>
+<span class="source-line key" id="banks-write" data-what="Пишем одно число в tile[row][lane]." data-how="Во входе всегда по 32 числа в строке, поэтому читаем индекс base + row * 32 + lane. В tile ширина строки может быть 33." data-why="Сдвигаем ячейки только в shared memory. Числа из input берём те же."><span class="line-no" aria-hidden="true">20</span><span class="src">        tile[row][lane] = input[base + row * 32 + lane];</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">21</span><span class="src"></span></span>
+<span class="source-line key" id="banks-barrier" data-what="Ждём, пока все потоки блока запишут тайл." data-how="Первый столбец записал поток 0, а после барьера его читают все потоки. К этому моменту записи в tile видны всему блоку." data-why="Без барьера поток мог бы прочитать чужую ячейку до записи. Это гонка, а не конфликт банков."><span class="line-no" aria-hidden="true">22</span><span class="src">    <span class="call">__syncthreads</span>();</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">23</span><span class="src"></span></span>
+<span class="source-line key" id="banks-read" data-what="Читаем первый столбец и записываем результат." data-how="Потоки 0 и 1 читают tile[0][0] и tile[1][0]. При ширине 32 это слова 0 и 32 одного банка, при ширине 33 — слова 0 и 33 разных банков. В output у каждого блока свои 32 ячейки." data-why="Меняем банки, но не числа и не место записи результата."><span class="line-no" aria-hidden="true">24</span><span class="src">    output[<span class="call">blockIdx</span>.x * 32 + lane] = tile[lane][0];</span></span>
+<span class="source-line" data-what="Закончили работу ядра." data-how="У каждого потока одно число в выходном массиве." data-why="После завершения ядра можно скопировать все столбцы на CPU."><span class="line-no" aria-hidden="true">25</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">26</span><span class="src"></span></span>
+<span class="source-line" data-what="На CPU выбираем, какое ядро запустить." data-how="width выбирает одну из двух готовых версий ядра, tiles — число блоков." data-why="Внутри ядра ширина уже известна и не меняется."><span class="line-no" aria-hidden="true">27</span><span class="src">void launch(int width, int tiles, const float* input, float* output) {</span></span>
+<span class="source-line" data-what="Запускаем ядро без отступа." data-how="Берём tiles блоков по 32 потока. При WIDTH = 32 начала строк tile идут с шагом 32 слова." data-why="При чтении столбца потоки попадают в один банк."><span class="line-no" aria-hidden="true">28</span><span class="src">    if (width == 32) read_column&lt;32&gt;&lt;&lt;&lt;tiles, 32&gt;&gt;&gt;(input, output);</span></span>
+<span class="source-line" data-what="Запускаем ядро с отступом." data-how="Блоков и потоков столько же. При WIDTH = 33 начала строк tile идут с шагом 33 слова." data-why="При чтении столбца адреса идут по разным банкам."><span class="line-no" aria-hidden="true">29</span><span class="src">    else             read_column&lt;33&gt;&lt;&lt;&lt;tiles, 32&gt;&gt;&gt;(input, output);</span></span>
+<span class="source-line" data-what="Закончили выбор ядра." data-how="Один вызов launch поставил ядро нужной ширины в очередь." data-why="CPU может поставить следующий запуск, не ожидая этого."><span class="line-no" aria-hidden="true">30</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">31</span><span class="src"></span></span>
+<span class="source-line" data-what="Стартуем программу на CPU." data-how="argc — число аргументов вместе с именем программы. В argv лежат сами строки." data-why="Можно передать 1 и посмотреть работу одного тайла в профилировщике."><span class="line-no" aria-hidden="true">32</span><span class="src">int main(int argc, char** argv) {</span></span>
+<span class="source-line" data-what="Выбираем число тайлов." data-how="Без аргумента берём 1024, с аргументом 1 — один." data-why="Один тайл удобно сравнить со схемой."><span class="line-no" aria-hidden="true">33</span><span class="src"><span class="comment">    // Без аргумента измеряем 1024 тайла; аргумент 1 оставляет один.</span></span></span>
+<span class="source-line" data-what="По умолчанию берём 1024 тайла." data-how="Каждый блок обрабатывает по одному тайлу." data-why="На одном тайле вклад чтения мал относительно всего запуска."><span class="line-no" aria-hidden="true">34</span><span class="src">    int tiles = 1024;</span></span>
+<span class="source-line" data-what="Проверяем, попросили ли один тайл." data-how="argc == 2 означает один аргумент после имени программы. strcmp возвращает 0, если argv[1] — строка 1." data-why="Команда ./bank_conflict 1 запустит один блок: как на схеме."><span class="line-no" aria-hidden="true">35</span><span class="src">    if (argc == 2 &amp;&amp; std::strcmp(argv[1], "1") == 0) tiles = 1;</span></span>
+<span class="source-line" data-what="Не принимаем другие аргументы." data-how="Если аргументы есть, но строка выше их не приняла, возвращаем EXIT_FAILURE." data-why="Других размеров в учебном запуске не вводим."><span class="line-no" aria-hidden="true">36</span><span class="src">    else if (argc != 1) return EXIT_FAILURE;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">37</span><span class="src"></span></span>
+<span class="source-line" data-what="Готовим вход и выход на CPU." data-how="Во входе по 32 × 32 числа на тайл. В выходе только по 32 — первый столбец каждого тайла." data-why="На каждый тайл приходится один выходной столбец, и все его значения проверяются."><span class="line-no" aria-hidden="true">38</span><span class="src">    std::vector&lt;float&gt; input(tiles * 32 * 32), output(tiles * 32);</span></span>
+<span class="source-line" data-what="Пишем в input[i] число i." data-how="Первый тайл начинается с 0, второй — с 1024." data-why="Тогда первый столбец легко проверить: читаем каждое 32-е число входа."><span class="line-no" aria-hidden="true">39</span><span class="src">    for (size_t i = 0; i &lt; input.size(); ++i) input[i] = float(i);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">40</span><span class="src"></span></span>
+<span class="source-line" data-what="Считаем размер входного буфера." data-how="Умножаем число элементов на sizeof(float)." data-why="cudaMalloc и cudaMemcpy принимают байты, а не количество чисел."><span class="line-no" aria-hidden="true">41</span><span class="src">    const size_t in_bytes = input.size() * sizeof(float);</span></span>
+<span class="source-line" data-what="Считаем размер выходного буфера." data-how="В output меньше чисел: только первые столбцы. Умножаем output.size() на sizeof(float)." data-why="cudaMalloc и cudaMemcpy принимают байты, а не количество чисел."><span class="line-no" aria-hidden="true">42</span><span class="src">    const size_t out_bytes = output.size() * sizeof(float);</span></span>
+<span class="source-line" data-what="Два адреса GPU." data-how="Будут указывать на вход и выход в памяти устройства." data-why="Источник и результат не перезаписывают друг друга."><span class="line-no" aria-hidden="true">43</span><span class="src">    float *d_input = nullptr, *d_output = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем входной буфер на GPU." data-how="Просим in_bytes байт. CUDA пишет адрес в d_input." data-why="Выделение происходит до замера."><span class="line-no" aria-hidden="true">44</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_input, in_bytes));</span></span>
+<span class="source-line" data-what="Выделяем выходной буфер на GPU." data-how="Просим out_bytes байт. CUDA пишет адрес в d_output." data-why="Выделение происходит до замера."><span class="line-no" aria-hidden="true">45</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_output, out_bytes));</span></span>
+<span class="source-line" data-what="Копируем вход на GPU." data-how="Из input.data() копируем in_bytes байт в d_input. Направление — CPU → GPU." data-why="Копия сделана до измерения."><span class="line-no" aria-hidden="true">46</span><span class="src">    check(<span class="call">cudaMemcpy</span>(d_input, input.data(), in_bytes, <span class="call">cudaMemcpyHostToDevice</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">47</span><span class="src"></span></span>
+<span class="source-line" data-what="Сначала прогреваем оба ядра." data-how="Ставим запуски с WIDTH = 32 и WIDTH = 33 до первой отметки времени." data-why="Первые запуски не попадут в замер."><span class="line-no" aria-hidden="true">48</span><span class="src"><span class="comment">    // Прогреть обе версии до замера.</span></span></span>
+<span class="source-line" data-what="Двенадцать повторений прогрева." data-how="Ставим запуски обеих версий в очередь до меток." data-why="Не измеряем первые вызовы после подготовки данных."><span class="line-no" aria-hidden="true">49</span><span class="src">    for (int i = 0; i &lt; 12; ++i) {</span></span>
+<span class="source-line" data-what="Прогрев без отступа." data-how="Ставим в очередь запуск с WIDTH = 32 до замера." data-why="Первые запуски не входят в измерение."><span class="line-no" aria-hidden="true">50</span><span class="src">        launch(32, tiles, d_input, d_output);</span></span>
+<span class="source-line" data-what="Прогрев с отступом." data-how="Ставим в ту же очередь запуск с WIDTH = 33." data-why="Сравниваем обе версии после прогрева."><span class="line-no" aria-hidden="true">51</span><span class="src">        launch(33, tiles, d_input, d_output);</span></span>
+<span class="source-line" data-what="Закончили ставить запуски для прогрева." data-how="Метка start пойдёт в очереди после них." data-why="Время прогрева не попадёт в замер."><span class="line-no" aria-hidden="true">52</span><span class="src">    }</span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">53</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">54</span><span class="src"></span></span>
+<span class="source-line" data-what="Заводим два события CUDA: start и stop." data-how="cudaEvent_t — тип дескриптора. Сначала создаём события, потом ставим их в ту же очередь, что и ядра." data-why="Нам нужен интервал на GPU, а не время вызова запуска на CPU."><span class="line-no" aria-hidden="true">55</span><span class="src">    <span class="call">cudaEvent_t</span> start, stop;</span></span>
+<span class="source-line" data-what="Создаём событие start." data-how="CUDA пишет дескриптор в start. Время отметим позже, когда поставим событие в очередь через cudaEventRecord." data-why="Событие можно использовать для серии запусков."><span class="line-no" aria-hidden="true">56</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;start));</span></span>
+<span class="source-line" data-what="Создаём событие stop." data-how="CUDA пишет второй дескриптор в stop." data-why="По отметкам начала и конца узнаем длительность серии."><span class="line-no" aria-hidden="true">57</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">58</span><span class="src"></span></span>
+<span class="source-line" data-what="Повторы для замера." data-how="В один интервал помещаем 100 одинаковых запусков." data-why="Один короткий запуск измерять шумно; берём среднее по серии."><span class="line-no" aria-hidden="true">59</span><span class="src">    constexpr int launches = 100;</span></span>
+<span class="source-line" data-what="Итог двух проверок." data-how="Начинаем с успеха. Ошибка любого варианта сделает результат ложным." data-why="Возвращаем успех только после двух правильных ответов."><span class="line-no" aria-hidden="true">60</span><span class="src">    bool all_correct = true;</span></span>
+<span class="source-line" data-what="Размер измеряемой работы." data-how="Программа сообщает, сколько тайлов обрабатывает каждый запуск: 1 или 1024." data-why="Результаты разных размеров нельзя сравнивать как времена одного тайла."><span class="line-no" aria-hidden="true">61</span><span class="src">    std::printf("Tiles: %d\n", tiles);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">62</span><span class="src"></span></span>
+<span class="source-line" data-what="Измеряем обе ширины." data-how="Первый проход использует 32, второй — 33. Вход и число блоков остаются прежними." data-why="Меняем только наличие отступа в shared memory."><span class="line-no" aria-hidden="true">63</span><span class="src">    for (int width = 32; width &lt;= 33; ++width) {</span></span>
+<span class="source-line" data-what="Готовим выход так, чтобы заметить пропущенную запись." data-how="cudaMemset пишет 0xff в каждый байт d_output, всего out_bytes байт. В float эти биты дают NaN, а не число 255." data-why="NaN не совпадает ни с одним ожидаемым числом, даже с нулём. Заполняем буфер до замера."><span class="line-no" aria-hidden="true">64</span><span class="src">        check(<span class="call">cudaMemset</span>(d_output, 0xff, out_bytes));</span></span>
+<span class="source-line" data-what="Ставим start перед серией." data-how="Очередь не передаём, поэтому берётся очередь по умолчанию (default stream). CUDA отметит время, когда дойдёт до start." data-why="Прогрев и подготовка выхода идут до этой метки."><span class="line-no" aria-hidden="true">65</span><span class="src">        check(<span class="call">cudaEventRecord</span>(start));</span></span>
+<span class="source-line" data-what="Повторяем один запуск." data-how="Цикл на CPU ставит launches ядер подряд в одну очередь." data-why="Метки измеряют весь интервал между началом и концом серии."><span class="line-no" aria-hidden="true">66</span><span class="src">        for (int i = 0; i &lt; launches; ++i)</span></span>
+<span class="source-line" data-what="Запускаем ядро для выбранной ширины." data-how="В каждом блоке потоки заполняют tile, ждут друг друга у барьера и читают первый столбец." data-why="Меряем всё ядро, а не только чтение столбца."><span class="line-no" aria-hidden="true">67</span><span class="src">            launch(width, tiles, d_input, d_output);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">68</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">69</span><span class="src">        check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line" data-what="Ставим stop за последним запуском." data-how="В той же очереди CUDA дойдёт до stop и отметит время, когда все запуски серии закончатся." data-why="Копирование и проверка будут уже после метки."><span class="line-no" aria-hidden="true">70</span><span class="src">        check(<span class="call">cudaEventRecord</span>(stop));</span></span>
+<span class="source-line" data-what="Ждём отметку конца." data-how="CPU ждёт, пока GPU дойдёт до stop. Все измеряемые запуски перед ним уже завершатся." data-why="Только теперь можно запросить длительность и читать результат."><span class="line-no" aria-hidden="true">71</span><span class="src">        check(<span class="call">cudaEventSynchronize</span>(stop));</span></span>
+<span class="source-line" data-what="Место для времени." data-how="cudaEventElapsedTime запишет в ms миллисекунды." data-why="Это время всей серии, не одного запуска."><span class="line-no" aria-hidden="true">72</span><span class="src">        float ms = 0.0f;</span></span>
+<span class="source-line" data-what="Узнаём, сколько шла серия." data-how="CUDA берёт разницу между отметками start и stop и пишет в ms миллисекунды." data-why="Чтобы получить время одного запуска, в выводе делим на количество повторов."><span class="line-no" aria-hidden="true">73</span><span class="src">        check(<span class="call">cudaEventElapsedTime</span>(&amp;ms, start, stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">74</span><span class="src"></span></span>
+<span class="source-line" data-what="Забираем первые столбцы на CPU." data-how="После stop копируем out_bytes байт из d_output в output.data()." data-why="Передача на CPU происходит вне замера; теперь можно проверить значения."><span class="line-no" aria-hidden="true">75</span><span class="src">        check(<span class="call">cudaMemcpy</span>(output.data(), d_output, out_bytes, <span class="call">cudaMemcpyDeviceToHost</span>));</span></span>
+<span class="source-line" data-what="Начало проверки." data-how="Любое неверное значение ниже сбросит флаг." data-why="Время не считается подтверждением правильности."><span class="line-no" aria-hidden="true">76</span><span class="src">        bool correct = true;</span></span>
+<span class="source-line" data-what="Проверяем первые столбцы всех тайлов." data-how="По 32 значения на каждый из tiles блоков." data-why="Четыре напечатанных числа — только образец ответа."><span class="line-no" aria-hidden="true">77</span><span class="src">        for (int i = 0; i &lt; tiles * 32; ++i)</span></span>
+<span class="source-line" data-what="Проверяем число с индексом i." data-how="В output[i] должно лежать первое число строки i: input[i * 32]. Так идём и через границы тайлов." data-why="Лишний столбец только в shared memory, поэтому ждём те же числа для обеих ширин."><span class="line-no" aria-hidden="true">78</span><span class="src">            if (output[i] != input[i * 32]) correct = false;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">79</span><span class="src"></span></span>
+<span class="source-line" data-what="Печатаем часть ответа, время и проверку." data-how="Печатаем данные после проверки." data-why="Можно сравнить оба варианта."><span class="line-no" aria-hidden="true">80</span><span class="src">        std::printf("WIDTH=%d: [%g, %g, %g, ..., %g]; %.2f us/launch; %s\n",</span></span>
+<span class="source-line" data-what="Показываем ширину и четыре числа из первого столбца." data-how="Берём первые три и последнее: output[0], output[1], output[2] и output[31]." data-why="По выводу видно, что отступ не изменил значения."><span class="line-no" aria-hidden="true">81</span><span class="src">                    width, output[0], output[1], output[2], output[31],</span></span>
+<span class="source-line" data-what="Время и статус." data-how="Миллисекунды умножаем на 1000 и делим на launches: получаем микросекунды на запуск. PASS означает, что правильны все столбцы." data-why="Два времени относятся к одной и той же работе."><span class="line-no" aria-hidden="true">82</span><span class="src">                    ms * 1000 / launches, correct ? "PASS" : "FAIL");</span></span>
+<span class="source-line" data-what="Запоминаем, прошли ли обе проверки." data-how="all_correct останется true, только если и прежний итог, и текущий correct равны true." data-why="Успех второго варианта не скрывает ошибку первого."><span class="line-no" aria-hidden="true">83</span><span class="src">        all_correct = all_correct &amp;&amp; correct;</span></span>
+<span class="source-line" data-what="Закончили измерять одну ширину." data-how="После 32 переходим к 33. После 33 цикл заканчивается." data-why="Для каждой ширины печатаем своё время и итог проверки."><span class="line-no" aria-hidden="true">84</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">85</span><span class="src"></span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">86</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(start));</span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">87</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(stop));</span></span>
+<span class="source-line" data-what="Освобождаем выходной буфер на GPU." data-how="Возвращаем память, выделенную через cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">88</span><span class="src">    check(<span class="call">cudaFree</span>(d_output));</span></span>
+<span class="source-line" data-what="Освобождаем входной буфер на GPU." data-how="Возвращаем память, выделенную через cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">89</span><span class="src">    check(<span class="call">cudaFree</span>(d_input));</span></span>
+<span class="source-line" data-what="Код завершения." data-how="Успех — только при правильных результатах." data-why="Ошибка даёт ненулевой статус."><span class="line-no" aria-hidden="true">90</span><span class="src">    return all_correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Закончили main." data-how="Освободили буферы и события CUDA." data-why="Оболочка получит общий итог двух проверок."><span class="line-no" aria-hidden="true">91</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="banks-run-title">
+    <h2 id="banks-run-title">Запуск: сколько времени экономит пустой столбец?</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 06_bank_conflict.cu -o bank_conflict
+./bank_conflict</code></pre>
+    <p>На схеме был один тайл. Для замера берём 1024: каждый блок обрабатывает свой. Вот вывод на Quadro RTX 6000:</p>
+    <pre><code>Tiles: 1024
+WIDTH=32: [0, 32, 64, ..., 992]; 4.92 us/launch; PASS
+WIDTH=33: [0, 32, 64, ..., 992]; 4.45 us/launch; PASS</code></pre>
+    <p>Сверь числа в обеих строках: <code>[0, 32, 64, ..., 992]</code>. Это часть первого столбца первого тайла. Последнее число берём из строки 31: <code>31 * 32 = 992</code>. Пустой столбец добавили справа, а читаем по-прежнему первый. Проверяем первый столбец каждого тайла.</p>
+    <p><strong>Почему выигрыш около 10%?</strong> Чтение <code>tile[lane][0]</code> теперь идёт по разным банкам. Но каждый блок всё так же загружает 1024 числа из глобальной памяти, пишет их в shared memory, ждёт у барьера и записывает ответ. Весь запуск занял на <strong>0,47 мкс</strong> меньше. Копируем и проверяем ответ уже после замера.</p>
+    <details>
+      <summary>Дополнительно: как увидеть конфликт банков и проверить гонки</summary>
+      <p>Запусти профилировщик на одном тайле:</p>
+      <pre><code>ncu --csv --launch-count 2 \
+  --metrics l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum,l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum \
+  ./bank_conflict 1</code></pre>
+      <p>Сначала посмотри на счётчик чтения (<code>op_ld.sum</code> в конце имени). При ширине 32 видим <strong>32 порции работы (wavefronts)</strong>, при 33 — <strong>одну</strong>. Потом сравни запись (<code>op_st.sum</code>): по 32 в обеих версиях, потому что записываем те же 32 строки.</p>
+      <p>А если замерить весь запуск с одним тайлом (<code>./bank_conflict 1</code> без профилировщика), в обеих версиях выходит около 2,4 мкс.</p>
+      <p>Racecheck смотрит не на банки, а на гонки. Например, не прочитал ли поток ячейку раньше, чем сосед в неё записал число. Отступ помогает банкам работать параллельно. Барьер нужен, чтобы не читать до записи.</p>
+      <pre><code>compute-sanitizer --tool racecheck --launch-count 2 \
+  --error-exitcode 99 ./bank_conflict 1</code></pre>
+      <p>В конце посмотри на сводку Racecheck: в этом примере ожидаем <code>0 hazards</code>.</p>
+    </details>
+  </section>
+</article>
+  <nav class="lesson-nav" aria-label="Навигация лекции"><a href="index.html">← Все листинги лекции</a></nav>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script src="lesson.js"></script>
+</body>
+</html>

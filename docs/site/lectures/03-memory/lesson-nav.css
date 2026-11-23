@@ -1,0 +1,25 @@
+/* Real section links, also on pages with their own styles. */
+.lesson-topnav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 9px;
+  padding: 13px 0 10px;
+  border-bottom: 1px solid #e8dfef;
+  color: #574f63;
+  font: 650 1rem/1.4 system-ui, sans-serif;
+}
+.lesson-topnav a {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: #57209f;
+  text-decoration: underline;
+  text-underline-offset: .22em;
+}
+.lesson-topnav a:first-child { margin-left: -9px; }
+.lesson-topnav a:hover { background: #f3eaff; }
+.lesson-topnav a:focus-visible { outline: 3px solid #792ce6; outline-offset: 1px; }
+.lesson-topnav [aria-current="page"] { color: #181420; padding: 5px 0; }

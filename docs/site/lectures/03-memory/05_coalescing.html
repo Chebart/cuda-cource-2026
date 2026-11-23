@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Удваиваем x: массив векторов или отдельный массив? · CUDA / Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+<style>
+  .coalescing-first { margin-top: 14px; }
+  .coalescing-layout { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0; }
+  .coalescing-layout span { padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); font-size: 18px; }
+  .coalescing-layout .coalescing-used, .coalescing-key.coalescing-used { border: 2px solid var(--purple-ink); font-weight: 750; }
+  .coalescing-sector-frame { margin: 12px 0; padding: 10px; border: 2px dashed var(--muted); border-radius: 8px; }
+  .coalescing-sector-frame .coalescing-layout { margin-bottom: 0; }
+  .coalescing-inset { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+  .coalescing-inset summary { cursor: pointer; font-weight: 700; }
+  .coalescing-inset summary + p { margin-top: 12px; }
+  .coalescing-inset p + p, .coalescing-panel p + p { margin-top: 12px; }
+  .coalescing-panel h3 { font-size: 1.2rem; margin-bottom: 12px; }
+  .coalescing-panel code, .coalescing-inset code { overflow-wrap: anywhere; }
+  #coalescing code, #coalescing-hero code { font-size: max(18px, .91em); }
+  #coalescing .code-frame code, #coalescing .line-no, #coalescing .code-frame figcaption, #coalescing .hint-how, #coalescing .figure-note, #coalescing-hero .kicker { font-size: 18px; }
+</style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Пример 05</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#coalescing-flow-title">Схема</a>
+    <a href="#coalescing-listing-title">Код</a>
+    <a href="#coalescing-run-title">Запуск</a>
+  </nav>
+<header class="hero" id="coalescing-hero">
+  <p class="kicker">CUDA / Лекция 03 / Листинг 05</p>
+  <h1>Удваиваем x: массив векторов или отдельный массив?</h1>
+  <p class="lead">Удваиваем <code>x</code> у 4 194 304 векторов. В одной версии читаем <code>x</code> из массива векторов, в другой — из массива, где лежат только <code>x</code>. Ответ одинаковый. Сравним время всего ядра: чтение, удвоение и запись.</p>
+</header>
+<article class="lesson-unit" id="coalescing">
+  <section class="flow" aria-labelledby="coalescing-flow-title">
+    <h2 id="coalescing-flow-title">Где лежат значения x?</h2>
+    <p class="flow-intro">У каждого вектора четыре координаты: <code>x, y, z, w</code>. В этом примере потоку нужна только <code>x</code>.</p>
+    <div class="diagram-grid coalescing-first">
+      <div class="diagram-panel"><h3>Массив векторов (AoS)</h3><p>Потоки читают <code>vectors[i].x</code>. Между соседними <code>x</code> — 16 байт.</p>
+        <div class="diagram-strip"><span class="diagram-mark active">x0</span><span>y0 z0 w0</span><span class="diagram-mark active">x1</span><span>y1 z1 w1</span><span class="diagram-mark active">x2</span><span>…</span></div>
+      </div>
+      <div class="diagram-panel"><h3>Отдельный массив на координату (SoA)</h3><p>Потоки читают <code>x[i]</code>. Между соседними <code>x</code> — 4 байта.</p>
+        <div class="diagram-strip"><span class="diagram-mark active">x0</span><span class="diagram-mark active">x1</span><span class="diagram-mark active">x2</span><span>…</span></div>
+        <p><code>[y0, y1, …]</code> · <code>[z0, z1, …]</code> · <code>[w0, w1, …]</code> — отдельные массивы. Ядру передаём только <code>x</code>.</p>
+      </div>
+    </div>
+    <figure class="flow-figure" aria-labelledby="coalescing-figure-title">
+      <figcaption id="coalescing-figure-title">Сколько нужных x помещается в одном секторе?</figcaption>
+      <p class="figure-intro">На схеме один warp: 32 потока. Каждый читает один <code>x</code>. Пунктиром обведён сектор (32 байта), толстой рамкой — нужные <code>x</code>. Один <code>float</code> занимает 4 байта, целый вектор в AoS — 16. В обоих случаях начинаем читать на границе сектора.</p>
+      <div class="diagram-grid">
+        <section class="diagram-panel coalescing-panel" aria-labelledby="coalescing-aos-title">
+          <h3 id="coalescing-aos-title">AoS: поля одной записи рядом</h3>
+          <div class="coalescing-sector-frame">
+            <div class="coalescing-layout" aria-label="Один сектор AoS: нужные x0 и x1 среди восьми полей">
+              <span class="coalescing-used">x0</span><span>y0</span><span>z0</span><span>w0</span><span class="coalescing-used">x1</span><span>y1</span><span>z1</span><span>w1</span>
+            </div>
+          </div>
+          <p>В секторе два нужных <code>x</code>. Для 32 потоков нужно <strong>32 ÷ 2 = 16 секторов</strong>.</p>
+        </section>
+        <section class="diagram-panel coalescing-panel" aria-labelledby="coalescing-soa-title">
+          <h3 id="coalescing-soa-title">SoA: все x рядом</h3>
+          <div class="coalescing-sector-frame">
+            <div class="coalescing-layout" aria-label="Один сектор SoA: все восемь полей нужны">
+              <span class="coalescing-used">x0</span><span class="coalescing-used">x1</span><span class="coalescing-used">x2</span><span class="coalescing-used">x3</span><span class="coalescing-used">x4</span><span class="coalescing-used">x5</span><span class="coalescing-used">x6</span><span class="coalescing-used">x7</span>
+            </div>
+          </div>
+          <p>В секторе восемь нужных <code>x</code>. Для 32 потоков нужно <strong>32 ÷ 8 = 4 сектора</strong>.</p>
+        </section>
+      </div>
+      <p class="figure-note">Каждому из 32 потоков всё так же нужен свой <code>x</code>. GPU объединяет чтения, которые попадают в один сектор. Когда нужные числа лежат рядом, на весь warp нужно меньше секторов. Такое объединение называют <strong>coalescing</strong>.</p>
+    </figure>
+    <details class="coalescing-inset" id="coalescing-padding-title">
+      <summary>Подробнее: откуда в структуре пустые байты</summary>
+      <p>Выравнивание говорит, с какого адреса можно начать хранить число. Обычно адрес <code>float</code> должен делиться на 4. Поэтому в <code>struct { char tag; float x; }</code> после первого байта пропускаем ещё три, чтобы <code>x</code> начался с байта 4. Эти пустые байты — <strong>padding</strong>:</p>
+      <div class="coalescing-layout" aria-label="Пример структуры с выравниванием float на 4 байта и размером 8 байт">
+        <span>tag · байт 0</span><span>пусто · байты 1–3</span><span class="coalescing-used">x · байты 4–7</span>
+      </div>
+      <p>С пустыми байтами выходит 8 байт на запись. На практике размер проверяем через <code>sizeof</code>, выравнивание — через <code>alignof</code>, смещение поля — через <code>offsetof</code>. В нашем <code>Vector4</code> четыре <code>float</code> лежат подряд: по 4 байта на поле, всего 16 байт.</p>
+      <p>Адрес от <code>cudaMalloc</code> выровнен как минимум на 256 байт, поэтому начало массива совпадает с границей 32-байтного сектора. А если начать с <code>x + 1</code>, те же 32 <code>float</code> займут байты 4–131: получим уже <strong>5 секторов</strong> вместо четырёх.</p>
+    </details>
+    <details class="coalescing-inset" id="coalescing-transpose-title">
+      <summary>Подробнее: почему при транспонировании запись отличается от чтения</summary>
+      <p>Пусть соседние потоки берут разные <code>col</code> в одной строке <code>row</code>. В <code>out[col * height + row] = in[row * width + col]</code> читаем соседние числа, но пишем уже в разные строки, с шагом <code>height × sizeof(float)</code> байт. Запись затрагивает больше секторов, как чтение x в AoS. Поэтому смотрим на чтение и запись отдельно. Чтобы поменять порядок обращений, можно использовать тайл в shared memory.</p>
+    </details>
+  </section>
+  <section class="listing" aria-labelledby="coalescing-listing-title">
+    <header class="listing-header"><h2 id="coalescing-listing-title">Код: удваиваем x в AoS и SoA</h2><div class="actions"><a href="05_coalescing.cu" download>Скачать .cu</a><button type="button" data-copy="coalescing-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div></header>
+    <div class="listing-grid">
+      <aside class="reading" aria-labelledby="coalescing-reading-title">
+        <h3 id="coalescing-reading-title">Чем отличаются две строки чтения</h3>
+        <p><a href="#coalescing-aos-load">Строка 16</a>: берём <code>x</code> из вектора. <a href="#coalescing-soa-load">Строка 21</a>: берём <code>x</code> из отдельного массива. Умножение и запись результата одинаковые.</p>
+        <p>Ставим отметки CUDA Events до и после 100 запусков одного ядра. В <a href="#coalescing-verify">строке 82</a> уже после замера проверяем на CPU, что в каждой ячейке получилось <code>2*x</code>.</p>
+      </aside>
+      <figure class="code-frame" id="coalescing-code">
+  <figcaption>05_coalescing.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем заголовок CUDA Runtime." data-how="В нём объявлены функции для работы с памятью, событиями и ошибками." data-why="Они нужны, чтобы подготовить данные и замерить работу ядра."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Вывод результата." data-how="Объявляет std::printf и std::fprintf." data-why="Печатаем время, ответы и ошибки."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Завершение программы." data-how="Объявляет std::exit и коды завершения." data-why="Сбой не должен выглядеть как успешная проверка."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line" data-what="Массивы на CPU." data-how="std::vector хранит элементы подряд; data() даёт указатель на начало." data-why="Удобно выделить большие буферы вне стека."><span class="line-no" aria-hidden="true">4</span><span class="src">#include &lt;vector&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">5</span><span class="src"></span></span>
+<span class="source-line" data-what="Описываем один вектор." data-how="У него четыре поля float: x, y, z и w. Здесь они занимают 16 байт." data-why="Сейчас нам нужен только x, но в AoS между двумя x лежат ещё y, z и w."><span class="line-no" aria-hidden="true">6</span><span class="src">struct Vector4 { float x, y, z, w; };</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">7</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Не продолжаем замер после ошибки."><span class="line-no" aria-hidden="true">8</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Если нет, следующие строки напечатают ошибку."><span class="line-no" aria-hidden="true">9</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печать ошибки CUDA." data-how="cudaGetErrorString переводит статус в текст." data-why="Видно, почему программа остановилась."><span class="line-no" aria-hidden="true">10</span><span class="src">    std::fprintf(stderr, "%s\n", <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Остановка с ошибкой." data-how="Возвращаем оболочке код неудачи." data-why="Не продолжаем замер после сбоя."><span class="line-no" aria-hidden="true">11</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Закончили check." data-how="При ошибке программа уже остановилась. Без ошибки вышли через return." data-why="Дальше — ядра для двух раскладок."><span class="line-no" aria-hidden="true">12</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">13</span><span class="src"></span></span>
+<span class="source-line" data-what="Удваиваем x из массива векторов." data-how="vectors — вход на GPU, output — массив ответов, n — число векторов." data-why="Каждый поток берёт из своей записи только x."><span class="line-no" aria-hidden="true">14</span><span class="src"><span class="call">__global__</span> void scale_x_aos(const Vector4* vectors, float* output, int n) {</span></span>
+<span class="source-line" data-what="Считаем номер потока во всей сетке." data-how="blockIdx.x * blockDim.x — сколько потоков в предыдущих блоках. Прибавляем номер в своём блоке." data-why="Получаем индекс вектора. У потоков из разных блоков индексы тоже разные."><span class="line-no" aria-hidden="true">15</span><span class="src">    const int i = <span class="call">blockIdx</span>.x * <span class="call">blockDim</span>.x + <span class="call">threadIdx</span>.x;</span></span>
+<span class="source-line key" id="coalescing-aos-load" data-what="Удваиваем x и пишем в output[i]." data-how="Берём vectors[i].x. Соседний поток читает следующий x, на 16 байт дальше. При i ≥ n ничего не читаем и не пишем." data-why="При таком шаге полный warp на схеме затрагивает 16 входных секторов."><span class="line-no" aria-hidden="true">16</span><span class="src">    if (i &lt; n) output[i] = 2.0f * vectors[i].x;</span></span>
+<span class="source-line" data-what="Закончили ядро AoS." data-how="Поток либо записал один результат в output[i], либо пропустил запись при i ≥ n." data-why="В следующем ядре меняем только то, откуда берём x."><span class="line-no" aria-hidden="true">17</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">18</span><span class="src"></span></span>
+<span class="source-line" data-what="Удваиваем x из отдельного массива." data-how="На вход здесь передаём только x. output и n такие же, как в AoS." data-why="y, z и w для этого расчёта не нужны."><span class="line-no" aria-hidden="true">19</span><span class="src"><span class="call">__global__</span> void scale_x_soa(const float* x, float* output, int n) {</span></span>
+<span class="source-line" data-what="Считаем номер потока так же, как в AoS." data-how="К числу потоков в предыдущих блоках прибавляем threadIdx.x." data-why="У одного и того же x в обеих раскладках будет один и тот же индекс i."><span class="line-no" aria-hidden="true">20</span><span class="src">    const int i = <span class="call">blockIdx</span>.x * <span class="call">blockDim</span>.x + <span class="call">threadIdx</span>.x;</span></span>
+<span class="source-line key" id="coalescing-soa-load" data-what="Удваиваем x и пишем туда же: в output[i]." data-how="Берём x[i]. Соседний поток читает x[i + 1], на 4 байта дальше. Границу i &lt; n проверяем так же, как в AoS." data-why="На схеме для чтения хватает 4 секторов на warp. Число записей результата не меняется."><span class="line-no" aria-hidden="true">21</span><span class="src">    if (i &lt; n) output[i] = 2.0f * x[i];</span></span>
+<span class="source-line" data-what="Закончили ядро SoA." data-how="Поток записал результат туда же, куда записал бы AoS: в output[i], если i &lt; n." data-why="Сравним не результат записи, а время обоих ядер."><span class="line-no" aria-hidden="true">22</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">23</span><span class="src"></span></span>
+<span class="source-line" data-what="На CPU выбираем, какое ядро запустить." data-how="По флагу soa выбираем чтение из x или vectors. Оба ядра по очереди пишут в один output." data-why="Так можем замерить обе версии одним и тем же циклом."><span class="line-no" aria-hidden="true">24</span><span class="src">void launch(bool soa, int n, const Vector4* vectors, const float* x, float* output) {</span></span>
+<span class="source-line" data-what="Потоки на блок." data-how="Берём 256 потоков для каждой раскладки." data-why="Не меняем размер блока между сравниваемыми запусками."><span class="line-no" aria-hidden="true">25</span><span class="src">    constexpr int threads = 256;</span></span>
+<span class="source-line" data-what="Считаем, сколько блоков нужно." data-how="Округляем n / threads вверх: если остались элементы, берём ещё блок. Потоки за концом массива остановит проверка i &lt; n." data-why="Каждому вектору нужен свой поток, в том числе в последнем блоке."><span class="line-no" aria-hidden="true">26</span><span class="src">    const int blocks = (n + threads - 1) / threads;</span></span>
+<span class="source-line" data-what="Запускаем SoA, если soa равно true." data-how="В x пришёл указатель d_x. Передаём его ядру вместе с output и n." data-why="Читаем соседние x подряд; буфер результата тот же, что для AoS."><span class="line-no" aria-hidden="true">27</span><span class="src">    if (soa) scale_x_soa&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(x, output, n);</span></span>
+<span class="source-line" data-what="Иначе запускаем AoS." data-how="В vectors пришёл указатель d_vectors. Передаём его ядру вместе с теми же output и n." data-why="Тот же размер запуска и то же число результатов."><span class="line-no" aria-hidden="true">28</span><span class="src">    else     scale_x_aos&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(vectors, output, n);</span></span>
+<span class="source-line" data-what="Закончили выбор ядра." data-how="Один вызов launch поставил одно ядро в очередь." data-why="CPU может поставить следующий запуск, не ожидая окончания первого."><span class="line-no" aria-hidden="true">29</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">30</span><span class="src"></span></span>
+<span class="source-line" data-what="Порядок опыта на CPU." data-how="Готовим данные, запускаем GPU, проверяем ответ." data-why="Служебные шаги отделены от работы ядра."><span class="line-no" aria-hidden="true">31</span><span class="src">int main() {</span></span>
+<span class="source-line" data-what="Готовим одни и те же x в двух раскладках." data-how="У AoS каждый x лежит в записи с y, z и w. У SoA все x лежат рядом." data-why="В обоих ядрах удваиваем одни и те же числа."><span class="line-no" aria-hidden="true">32</span><span class="src"><span class="comment">    // Подготовить два расположения одних и тех же x.</span></span></span>
+<span class="source-line" data-what="Берём 4 194 304 вектора." data-how="Это 4 × 1024 × 1024. На схеме был один warp, здесь запускаем много блоков." data-why="На большом массиве разницу в чтении легче заметить в замере."><span class="line-no" aria-hidden="true">33</span><span class="src">    constexpr int n = 4 * 1024 * 1024;</span></span>
+<span class="source-line" data-what="Считаем размер массива x и массива ответов." data-how="В каждом по n значений float, поэтому умножаем n на sizeof(float)." data-why="cudaMalloc и cudaMemcpy принимают байты, а не количество чисел."><span class="line-no" aria-hidden="true">34</span><span class="src">    constexpr size_t bytes = n * sizeof(float);</span></span>
+<span class="source-line" data-what="Заводим массив AoS на CPU." data-how="В каждом из n элементов лежит целый Vector4." data-why="Это вход с полями одного вектора рядом."><span class="line-no" aria-hidden="true">35</span><span class="src">    std::vector&lt;Vector4&gt; vectors(n);</span></span>
+<span class="source-line" data-what="Готовим массив x и место для результата на CPU." data-how="В x по одному числу на вектор. В result копируем ответ после каждого замера." data-why="По одному и тому же x проверим ответы обеих версий."><span class="line-no" aria-hidden="true">36</span><span class="src">    std::vector&lt;float&gt; x(n), result(n);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">37</span><span class="src"></span></span>
+<span class="source-line" data-what="Заполняем оба входа." data-how="Идём по всем n позициям." data-why="Подготовка раскладок происходит до измерения."><span class="line-no" aria-hidden="true">38</span><span class="src">    for (int i = 0; i &lt; n; ++i) {</span></span>
+<span class="source-line" data-what="Пишем в x[i] число от 1 до 4096." data-how="i % 4096 + 1 даёт повторяющийся ряд. Удвоенные числа будут положительными." data-why="Если ядро пропустит запись, в выходном буфере останется ноль. С ненулевым ответом он не совпадёт."><span class="line-no" aria-hidden="true">39</span><span class="src">        x[i] = float(i % 4096 + 1);</span></span>
+<span class="source-line" data-what="Кладём тот же x в вектор." data-how="В vectors[i].x пишем x[i], а в y, z и w — отрицательные числа." data-why="Если вместо x прочитаем соседнее поле, проверка это заметит."><span class="line-no" aria-hidden="true">40</span><span class="src">        vectors[i] = {x[i], -1.0f, -2.0f, -3.0f};</span></span>
+<span class="source-line" data-what="Закончили заполнять оба входа." data-how="У каждого vectors[i].x то же число, что и в x[i]." data-why="Теперь можно скопировать обе раскладки на GPU."><span class="line-no" aria-hidden="true">41</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">42</span><span class="src"></span></span>
+<span class="source-line" data-what="Загружаем оба входа на GPU." data-how="Копируем целые векторы для AoS и только x для SoA." data-why="К началу замера данные уже на GPU."><span class="line-no" aria-hidden="true">43</span><span class="src"><span class="comment">    // Загрузить входы до замера.</span></span></span>
+<span class="source-line" data-what="Указатель на вход AoS на GPU." data-how="После cudaMalloc будет указывать на массив Vector4." data-why="В записи остаются все четыре поля."><span class="line-no" aria-hidden="true">44</span><span class="src">    Vector4* d_vectors = nullptr;</span></span>
+<span class="source-line" data-what="Заводим два указателя на массивы GPU." data-how="В d_x будет адрес входа SoA, в d_out — адрес буфера для обоих результатов." data-why="Объём записей результата одинаков для обеих раскладок."><span class="line-no" aria-hidden="true">45</span><span class="src">    float *d_x = nullptr, *d_out = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем на GPU место для AoS." data-how="Просим n * sizeof(Vector4) байт. CUDA пишет адрес в d_vectors." data-why="На каждый вектор здесь нужно 16 байт."><span class="line-no" aria-hidden="true">46</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_vectors, n * sizeof(Vector4)));</span></span>
+<span class="source-line" data-what="Выделяем на GPU место для SoA." data-how="bytes — размер массива из n значений float. CUDA пишет адрес в d_x." data-why="Остальные координаты отдельно не загружаем: ядро их не читает."><span class="line-no" aria-hidden="true">47</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_x, bytes));</span></span>
+<span class="source-line" data-what="Выделяем на GPU место для результата." data-how="CUDA пишет адрес в d_out. Нужно по одному float на вектор." data-why="Обе версии пишут один и тот же объём данных."><span class="line-no" aria-hidden="true">48</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_out, bytes));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">49</span><span class="src"></span></span>
+<span class="source-line" data-what="Копируем векторы на GPU." data-how="vectors.data() — адрес первого вектора на CPU. В d_vectors копируем n записей целиком." data-why="Копирование входа не считается в CUDA Events."><span class="line-no" aria-hidden="true">50</span><span class="src">    check(<span class="call">cudaMemcpy</span>(d_vectors, vectors.data(), n * sizeof(Vector4),</span></span>
+<span class="source-line" data-what="Направление копии AoS." data-how="cudaMemcpyHostToDevice: CPU → GPU." data-why="После этого в памяти GPU есть исходные векторы."><span class="line-no" aria-hidden="true">51</span><span class="src">                     <span class="call">cudaMemcpyHostToDevice</span>));</span></span>
+<span class="source-line" data-what="Копируем массив x на GPU." data-how="Из x.data() в d_x копируем bytes байт. cudaMemcpyHostToDevice задаёт направление: CPU → GPU." data-why="Копия сделана до измерения."><span class="line-no" aria-hidden="true">52</span><span class="src">    check(<span class="call">cudaMemcpy</span>(d_x, x.data(), bytes, <span class="call">cudaMemcpyHostToDevice</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">53</span><span class="src"></span></span>
+<span class="source-line" data-what="Сначала прогреваем оба ядра." data-how="Запускаем AoS и SoA, затем создаём события для замера." data-why="Первые запуски в измерение не попадут."><span class="line-no" aria-hidden="true">54</span><span class="src"><span class="comment">    // Прогреть обе версии и создать метки времени.</span></span></span>
+<span class="source-line" data-what="Прогрев обеих раскладок." data-how="В каждой итерации ставим в одну очередь запуски AoS и SoA." data-why="Метки времени идут следом, поэтому прогрев в них не попадёт."><span class="line-no" aria-hidden="true">55</span><span class="src">    for (int i = 0; i &lt; 12; ++i) {</span></span>
+<span class="source-line" data-what="Прогрев AoS." data-how="false выбирает чтение из векторов." data-why="Размер работы тот же, что в замере."><span class="line-no" aria-hidden="true">56</span><span class="src">        launch(false, n, d_vectors, d_x, d_out);</span></span>
+<span class="source-line" data-what="Прогрев SoA." data-how="true выбирает чтение из массива x." data-why="Обе версии выполняются до первого замера."><span class="line-no" aria-hidden="true">57</span><span class="src">        launch(true, n, d_vectors, d_x, d_out);</span></span>
+<span class="source-line" data-what="Закончили ставить запуски для прогрева." data-how="Отметка start пойдёт в той же очереди уже после них." data-why="Время прогрева не попадёт в замер."><span class="line-no" aria-hidden="true">58</span><span class="src">    }</span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">59</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">60</span><span class="src"></span></span>
+<span class="source-line" data-what="Заводим два события CUDA: start и stop." data-how="cudaEvent_t — тип дескриптора. Сначала создаём события, потом ставим их в ту же очередь, что и ядра." data-why="Нам нужен интервал на GPU, а не время вызова запуска на CPU."><span class="line-no" aria-hidden="true">61</span><span class="src">    <span class="call">cudaEvent_t</span> start, stop;</span></span>
+<span class="source-line" data-what="Создаём событие start." data-how="CUDA пишет дескриптор в start. Время отметим позже, когда поставим событие в очередь через cudaEventRecord." data-why="Событие можно использовать для серии запусков."><span class="line-no" aria-hidden="true">62</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;start));</span></span>
+<span class="source-line" data-what="Создаём событие stop." data-how="CUDA пишет второй дескриптор в stop." data-why="По отметкам начала и конца узнаем длительность серии."><span class="line-no" aria-hidden="true">63</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">64</span><span class="src"></span></span>
+<span class="source-line" data-what="Берём 100 запусков для каждого замера." data-how="Между start и stop запускаем одно и то же ядро 100 раз." data-why="Один короткий запуск легко даёт шумный результат. Поэтому сравниваем среднее."><span class="line-no" aria-hidden="true">65</span><span class="src">    constexpr int launches = 100;</span></span>
+<span class="source-line" data-what="Итог двух проверок." data-how="Начинаем с успеха. Ошибка любого варианта сделает результат ложным." data-why="Возвращаем успех только после двух правильных ответов."><span class="line-no" aria-hidden="true">66</span><span class="src">    bool all_correct = true;</span></span>
+<span class="source-line" data-what="Два варианта опыта." data-how="При soa = 0 измеряем AoS, при soa = 1 — SoA." data-why="В цикле одинаковы число запусков, объём результата и способ измерения."><span class="line-no" aria-hidden="true">67</span><span class="src">    for (int soa = 0; soa &lt; 2; ++soa) {</span></span>
+<span class="source-line" data-what="Обнуляем выход перед замером." data-how="cudaMemset заполняет нулями bytes байт в d_out. Делаем это до start." data-why="Верные ответы положительные. Если ядро пропустит элемент, ответ другой раскладки не скроет ошибку."><span class="line-no" aria-hidden="true">68</span><span class="src">        check(<span class="call">cudaMemset</span>(d_out, 0, bytes));</span></span>
+<span class="source-line" data-what="Ставим start перед серией." data-how="Очередь не передаём, поэтому берётся очередь по умолчанию (default stream). CUDA отметит время, когда дойдёт до start." data-why="Прогрев и подготовка выхода идут до этой метки."><span class="line-no" aria-hidden="true">69</span><span class="src">        check(<span class="call">cudaEventRecord</span>(start));</span></span>
+<span class="source-line" data-what="Повторяем запуск launches раз." data-how="CPU ставит все запуски в одну очередь." data-why="Метки измеряют весь интервал между началом и концом серии."><span class="line-no" aria-hidden="true">70</span><span class="src">        for (int i = 0; i &lt; launches; ++i)</span></span>
+<span class="source-line" data-what="Запускаем выбранное ядро." data-how="Каждый запуск проходит по всем n векторам. Флаг soa определяет, из какого массива читаем." data-why="Внутри замера не переносим и не перекладываем входы."><span class="line-no" aria-hidden="true">71</span><span class="src">            launch(soa, n, d_vectors, d_x, d_out);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">72</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">73</span><span class="src">        check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line" data-what="Ставим stop за последним запуском." data-how="В той же очереди CUDA дойдёт до stop и отметит время, когда все запуски серии закончатся." data-why="Копирование и проверка будут уже после метки."><span class="line-no" aria-hidden="true">74</span><span class="src">        check(<span class="call">cudaEventRecord</span>(stop));</span></span>
+<span class="source-line" data-what="Ждём отметку конца." data-how="CPU ждёт, пока GPU дойдёт до stop. Все измеряемые запуски перед ним уже завершатся." data-why="Только теперь можно запросить длительность и читать результат."><span class="line-no" aria-hidden="true">75</span><span class="src">        check(<span class="call">cudaEventSynchronize</span>(stop));</span></span>
+<span class="source-line" data-what="Место для времени." data-how="cudaEventElapsedTime запишет в ms миллисекунды." data-why="Это время всей серии, не одного запуска."><span class="line-no" aria-hidden="true">76</span><span class="src">        float ms = 0.0f;</span></span>
+<span class="source-line" data-what="Узнаём, сколько шла серия." data-how="CUDA берёт разницу между отметками start и stop и пишет в ms миллисекунды." data-why="Чтобы получить время одного запуска, в выводе делим на количество повторов."><span class="line-no" aria-hidden="true">77</span><span class="src">        check(<span class="call">cudaEventElapsedTime</span>(&amp;ms, start, stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">78</span><span class="src"></span></span>
+<span class="source-line" data-what="Копируем ответ на CPU." data-how="Из d_out берём bytes байт и пишем в result.data(), уже после stop." data-why="Передача на CPU происходит вне замера; теперь можно проверить значения."><span class="line-no" aria-hidden="true">79</span><span class="src">        check(<span class="call">cudaMemcpy</span>(result.data(), d_out, bytes, <span class="call">cudaMemcpyDeviceToHost</span>));</span></span>
+<span class="source-line" data-what="Начало проверки." data-how="Любое неверное значение ниже сбросит флаг." data-why="Время не считается подтверждением правильности."><span class="line-no" aria-hidden="true">80</span><span class="src">        bool correct = true;</span></span>
+<span class="source-line" data-what="Перебираем результаты." data-how="Проверяем все n элементов на CPU." data-why="Не ограничиваем проверку напечатанными числами."><span class="line-no" aria-hidden="true">81</span><span class="src">        for (int i = 0; i &lt; n; ++i)</span></span>
+<span class="source-line key" id="coalescing-verify" data-what="Проверяем число с индексом i." data-how="В result[i] должно лежать удвоенное x[i], для AoS и SoA эталон один." data-why="Сверяем с ожидаемым ответом, а не только сравниваем раскладки друг с другом."><span class="line-no" aria-hidden="true">82</span><span class="src">            if (result[i] != 2.0f * x[i]) correct = false;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">83</span><span class="src"></span></span>
+<span class="source-line" data-what="Печатаем числа, время и результат проверки." data-how="Печатаем данные после проверки." data-why="Можно сравнить оба варианта."><span class="line-no" aria-hidden="true">84</span><span class="src">        std::printf("%s: [%g, %g, %g, ..., %g]; %.2f us/launch; %s\n",</span></span>
+<span class="source-line" data-what="Печатаем название раскладки и первые три числа." data-how="Берём result[0], result[1] и result[2] из ответа GPU." data-why="Так видно, что работа совпадает у обеих версий."><span class="line-no" aria-hidden="true">85</span><span class="src">                    soa ? "SoA" : "AoS", result[0], result[1], result[2],</span></span>
+<span class="source-line" data-what="Последнее число, время и проверка." data-how="Берём result[n - 1]. ms умножаем на 1000 и делим на launches: получаем микросекунды на запуск." data-why="PASS означает, что проверен весь выход, не только напечатанные элементы."><span class="line-no" aria-hidden="true">86</span><span class="src">                    result[n - 1], ms * 1000 / launches, correct ? "PASS" : "FAIL");</span></span>
+<span class="source-line" data-what="Запоминаем, прошли ли обе проверки." data-how="all_correct останется true, только если и прежний итог, и текущий correct равны true." data-why="Успех второго варианта не скрывает ошибку первого."><span class="line-no" aria-hidden="true">87</span><span class="src">        all_correct = all_correct &amp;&amp; correct;</span></span>
+<span class="source-line" data-what="Закончили замер и проверку одной раскладки." data-how="После AoS переходим к SoA. После SoA выходим из цикла." data-why="Ответы проверяем сразу, пока другое ядро не перезаписало d_out."><span class="line-no" aria-hidden="true">88</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">89</span><span class="src"></span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">90</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(start));</span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">91</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(stop));</span></span>
+<span class="source-line" data-what="Освобождаем общий выходной буфер на GPU." data-how="Возвращаем память, выделенную через cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">92</span><span class="src">    check(<span class="call">cudaFree</span>(d_out));</span></span>
+<span class="source-line" data-what="Освобождаем буфер x на GPU." data-how="Возвращаем память, выделенную через cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">93</span><span class="src">    check(<span class="call">cudaFree</span>(d_x));</span></span>
+<span class="source-line" data-what="Освобождаем массив векторов на GPU." data-how="Возвращаем память, выделенную через cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">94</span><span class="src">    check(<span class="call">cudaFree</span>(d_vectors));</span></span>
+<span class="source-line" data-what="Код завершения." data-how="Успех — только при правильных результатах." data-why="Ошибка даёт ненулевой статус."><span class="line-no" aria-hidden="true">95</span><span class="src">    return all_correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Закончили main." data-how="Освободили память и события CUDA." data-why="Оболочка получит общий итог двух проверок."><span class="line-no" aria-hidden="true">96</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="coalescing-run-title">
+    <h2 id="coalescing-run-title">Запуск: одинаковый результат, разное время</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 05_coalescing.cu -o coalescing
+./coalescing</code></pre>
+    <p>Пример вывода на Quadro RTX 6000:</p>
+    <pre><code>AoS: [2, 4, 6, ..., 8192]; 147.13 us/launch; PASS
+SoA: [2, 4, 6, ..., 8192]; 61.79 us/launch; PASS</code></pre>
+    <p>Откуда 8192 в конце массива? На входе числа от 1 до 4096 повторяются. Последнее — 4096, его и удваиваем. Печатаем первые три числа и последнее, а для <code>PASS</code> проверяем весь массив.</p>
+    <p><code>us/launch</code> — среднее время одного запуска в микросекундах. С SoA получили <strong>61,79 мкс вместо 147,13 мкс</strong>. Вспомним схему: warp читает те же <code>x</code> из 4 секторов вместо 16. Умножение и запись те же. Данные готовим до замера, а ответ копируем на CPU и проверяем после.</p>
+    <details>
+      <summary>Дополнительно: сколько секторов затронули и сколько байтов прочитали</summary>
+      <p>Nsight Compute разберём в следующих лекциях. Здесь просим его снять счётчики с первых двух запусков: одного AoS и одного SoA.</p>
+      <pre><code>ncu --csv --launch-count 2 \
+  --metrics l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum,dram__bytes_read.sum \
+  ./coalescing</code></pre>
+      <p>Найди счётчик секторов при чтении (имя заканчивается на <code>global_op_ld.sum</code>) и сверь со схемой: на один warp было 16 секторов для AoS и 4 для SoA. Умножь каждое число на 131 072 — столько warp обрабатывают весь массив. Получишь 2 097 152 и 524 288 секторов.</p>
+      <p><code>dram__bytes_read.sum</code> показывает, сколько прочитали из DRAM: около 64 и 16 МиБ. Секторов для чтения стало вчетверо меньше. Выигрыш по времени меньше: замер включает всё ядро, в том числе запись тех же результатов.</p>
+      <p><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#coalesced-access-to-global-memory">CUDA C++ Best Practices Guide: Coalesced Access to Global Memory</a></p>
+    </details>
+  </section>
+</article>
+  <nav class="lesson-nav" aria-label="Навигация лекции"><a href="index.html">← Все листинги лекции</a></nav>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script src="lesson.js"></script>
+</body>
+</html>

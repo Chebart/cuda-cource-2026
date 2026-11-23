@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Что происходит, когда не хватает регистров? · CUDA / Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Пример 04</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#registers-question">Схема</a>
+    <a href="#registers-listing-title">Код</a>
+    <a href="#registers-run-title">Запуск</a>
+  </nav>
+<header class="hero">
+  <p class="kicker">CUDA / Лекция 03 / Листинг 04</p>
+  <h1>Что происходит, когда не хватает регистров?</h1>
+  <p class="lead">Дадим каждому потоку 64 числа. К каждому он прибавит 1, и так 128 раз. Соберём одно и то же ядро без лимита и с лимитом 32 регистра на поток. Посмотрим, где окажутся числа и как изменится время работы.</p>
+</header>
+<style>
+  .registers-lesson code { font-size: 1em; }
+  .registers-lesson .code-frame code { font-size: 18px; }
+  .registers-lesson .diagram-mark { font-size: 1rem; }
+  .registers-lesson .figure-note { font-size: 1rem; }
+</style>
+<article class="lesson-unit registers-lesson" id="registers">
+  <section class="flow" aria-labelledby="registers-question">
+    <h2 id="registers-question">Нужно сохранить 64 числа между шагами</h2>
+    <figure class="flow-figure" aria-labelledby="registers-storage-caption">
+      <figcaption id="registers-storage-caption">Что делает один поток</figcaption>
+      <div class="diagram-strip"><span class="diagram-mark">Читает 64 числа</span><span aria-hidden="true">→</span><span class="diagram-mark active">128 раз прибавляет 1 к каждому</span><span aria-hidden="true">→</span><span class="diagram-mark">Пишет 64 результата</span></div>
+      <p class="figure-note">Все 64 числа понадобятся на следующем шаге. Если регистров не хватает, компилятор добавляет запись части чисел в <strong>локальную память</strong> (<code>local memory</code>), а потом чтение обратно. Это <strong>spill</strong>. У каждого потока своя локальная память. Она находится в памяти GPU, а не в регистрах. Запись туда и чтение обратно могут замедлить ядро.</p>
+    </figure>
+  </section>
+  <section class="listing" aria-labelledby="registers-listing-title">
+    <div class="listing-header">
+      <h2 id="registers-listing-title">Код: прибавляем 1 к 64 числам в каждом потоке</h2>
+      <div class="actions"><a href="04_registers_local.cu" download>Скачать .cu</a><button type="button" data-copy="registers-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div>
+    </div>
+    <div class="listing-grid">
+      <aside class="reading">
+        <h3>Зачем разворачиваем внутренние циклы</h3>
+        <p><a href="#registers-array">Строка 17</a>: у потока 64 числа. В <a href="#registers-unroll">строке 19</a> просим компилятор развернуть цикл. Вместо <code>values[i]</code> получаем <code>values[0]</code>, <code>values[1]</code> и так далее. Так компилятор знает индекс заранее и может выбрать регистр для каждого числа.</p>
+        <p><a href="#registers-update">Строка 27</a>: прибавляем 1; на следующем шаге снова нужны все эти числа. Разворачиваем три коротких цикла — загрузку, прибавление и запись. Цикл по шагам оставляем. Делаем это в обеих сборках: для сравнения меняем только лимит регистров.</p>
+      </aside>
+      <figure class="code-frame" id="registers-code">
+  <figcaption>04_registers_local.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем заголовок CUDA Runtime." data-how="В нём объявлены функции для работы с памятью, событиями и ошибками." data-why="Они нужны, чтобы подготовить данные и замерить работу ядра."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок для печати." data-how="Объявляет std::printf и std::fprintf." data-why="Печатаем время, ответы и ошибки."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок для выхода из программы." data-how="Объявляет std::exit и коды завершения." data-why="При ошибке вернём оболочке код неудачи."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line" data-what="Подключаем std::vector для массивов на CPU." data-how="Элементы лежат подряд. data() даёт адрес первого элемента." data-why="Так можем выделить большие массивы не на стеке и передать их адреса в cudaMemcpy."><span class="line-no" aria-hidden="true">4</span><span class="src">#include &lt;vector&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">5</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Не продолжаем замер после ошибки."><span class="line-no" aria-hidden="true">6</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Если нет, следующие строки напечатают ошибку."><span class="line-no" aria-hidden="true">7</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печать ошибки CUDA." data-how="cudaGetErrorString переводит статус в текст." data-why="Видно, почему программа остановилась."><span class="line-no" aria-hidden="true">8</span><span class="src">    std::fprintf(stderr, "%s\n", <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Остановка с ошибкой." data-how="Возвращаем оболочке код неудачи." data-why="Не продолжаем замер после сбоя."><span class="line-no" aria-hidden="true">9</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Закончили check." data-how="При ошибке программа уже остановилась. Без ошибки вышли через return." data-why="Дальше — размер набора и код ядра."><span class="line-no" aria-hidden="true">10</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">11</span><span class="src"></span></span>
+<span class="source-line" data-what="Берём по 64 числа на поток." data-how="Каждый поток держит свой набор и прибавляет к его числам 1 на каждом шаге." data-why="Все 64 числа нужны до конца цикла. Так хотим увидеть, что случится, если на них не хватит регистров."><span class="line-no" aria-hidden="true">12</span><span class="src">constexpr int values_per_thread = 64;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">13</span><span class="src"></span></span>
+<span class="source-line" data-what="Одно ядро для обеих сборок." data-how="Передаём массивы input и output на GPU и число шагов steps." data-why="Меняем только лимит регистров при сборке. Сами прибавления остаются прежними."><span class="line-no" aria-hidden="true">14</span><span class="src"><span class="call">__global__</span> void add_steps(const float* input, float* output, int steps) {</span></span>
+<span class="source-line" data-what="Считаем номер потока во всей сетке." data-how="blockIdx.x * blockDim.x — сколько потоков в предыдущих блоках. Прибавляем номер потока в своём блоке." data-why="У потоков из разных блоков будут разные номера и разные элементы массива."><span class="line-no" aria-hidden="true">15</span><span class="src">    const int tid = <span class="call">blockIdx</span>.x * <span class="call">blockDim</span>.x + <span class="call">threadIdx</span>.x;</span></span>
+<span class="source-line" data-what="Считаем шаг между числами одного потока." data-how="stride равен числу потоков: 64 × 128 = 8192. Например, поток 0 берёт input[0], потом input[8192]." data-why="В массиве сначала идут первые числа всех потоков, потом вторые и так далее. Поэтому на каждом i соседние потоки читают рядом."><span class="line-no" aria-hidden="true">16</span><span class="src">    const int stride = <span class="call">gridDim</span>.x * <span class="call">blockDim</span>.x;</span></span>
+<span class="source-line key" id="registers-array" data-what="У каждого потока свой набор из 64 чисел." data-how="Во всех трёх циклах с values просим компилятор подставить постоянные индексы вместо i." data-why="Так компилятор может разложить числа по регистрам. Где они оказались, смотрим в отчёте сборки."><span class="line-no" aria-hidden="true">17</span><span class="src">    float values[values_per_thread];</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">18</span><span class="src"></span></span>
+<span class="source-line key" id="registers-unroll" data-what="Просим компилятор развернуть цикл загрузки." data-how="Вместо цикла с values[i] компилятор получает отдельные обращения: values[0], values[1], …, values[63]." data-why="В машинной инструкции регистр должен быть известен заранее. С постоянным индексом компилятор может выбрать его при сборке, а для переменного индекса может понадобиться массив в local memory."><span class="line-no" aria-hidden="true">19</span><span class="src">    #pragma unroll</span></span>
+<span class="source-line" data-what="Читаем все числа этого потока." data-how="Индекс i нумерует его 64 значения, а не потоки." data-why="Сначала загружаем набор, затем обновляем его много раз."><span class="line-no" aria-hidden="true">20</span><span class="src">    for (int i = 0; i &lt; values_per_thread; ++i)</span></span>
+<span class="source-line key" id="registers-reload" data-what="Загружаем следующее число потока в values[i]." data-how="При i = 1 поток 0 читает input[8192], а поток 1 — input[8193]." data-why="Одно и то же i даёт соседним потокам соседние адреса. Каждый читает своё число."><span class="line-no" aria-hidden="true">21</span><span class="src">        values[i] = input[i * stride + tid];</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">22</span><span class="src"></span></span>
+<span class="source-line" data-what="Оставляем внешний цикл по шагам." data-how="#pragma unroll 1 запрещает разворачивать только следующий for. Он по-прежнему делает steps шагов, а не один." data-why="На каждом шаге повторяем тот же блок из 64 прибавлений. Не нужно размножать этот блок в машинном коде."><span class="line-no" aria-hidden="true">23</span><span class="src">    #pragma unroll 1</span></span>
+<span class="source-line" data-what="Повторяем прибавления steps раз." data-how="В этом запуске steps = 128. На каждом шаге меняем все 64 числа потока." data-why="На следующем шаге нужны те же числа. При малом лимите часть из них компилятор сохраняет вне регистров."><span class="line-no" aria-hidden="true">24</span><span class="src">    for (int step = 0; step &lt; steps; ++step) {</span></span>
+<span class="source-line" data-what="Разворачиваем цикл внутри одного шага." data-how="Из values[i] += 1 получаем values[0] += 1, values[1] += 1 и так далее. Внешний цикл остаётся." data-why="Мало подставить постоянные индексы при загрузке. Они нужны и при прибавлении, чтобы компилятор мог держать числа в регистрах."><span class="line-no" aria-hidden="true">25</span><span class="src">        #pragma unroll</span></span>
+<span class="source-line" data-what="Проходим набор потока." data-how="Значение i меняется от 0 до 63." data-why="Один шаг обновляет весь набор."><span class="line-no" aria-hidden="true">26</span><span class="src">        for (int i = 0; i &lt; values_per_thread; ++i)</span></span>
+<span class="source-line key" id="registers-update" data-what="Прибавляем 1 к values[i]." data-how="Новое число оставляем в values: оно понадобится на следующем шаге. В output пока не пишем." data-why="Если в сборке с лимитом видим запись в local memory, её добавил компилятор для spill. В C++ такой записи нет."><span class="line-no" aria-hidden="true">27</span><span class="src">            values[i] += 1.0f;</span></span>
+<span class="source-line" data-what="Закрываем цикл по шагам." data-how="Если step ещё не дошёл до steps, повторяем прибавления." data-why="После последнего шага можно писать готовые числа в output."><span class="line-no" aria-hidden="true">28</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">29</span><span class="src"></span></span>
+<span class="source-line" data-what="Разворачиваем цикл записи результата." data-how="Берём values[0], values[1] и остальные числа по постоянным индексам. Запись в output остаётся." data-why="Если оставить values[i] с переменным i, компилятору может понадобиться массив в local memory даже на последнем шаге."><span class="line-no" aria-hidden="true">30</span><span class="src">    #pragma unroll</span></span>
+<span class="source-line" data-what="Сохраняем все 64 числа потока." data-how="Проходим по тому же набору после выполнения всех steps." data-why="CPU сможет проверить весь результат."><span class="line-no" aria-hidden="true">31</span><span class="src">    for (int i = 0; i &lt; values_per_thread; ++i)</span></span>
+<span class="source-line" data-what="Пишем готовое число в output." data-how="Записываем по тому же индексу i * stride + tid, по которому читали это число из input." data-why="У соседних потоков разные tid, поэтому записи не перетирают друг друга."><span class="line-no" aria-hidden="true">32</span><span class="src">        output[i * stride + tid] = values[i];</span></span>
+<span class="source-line" data-what="Закончили расчёт в ядре." data-how="Поток записал свои 64 числа." data-why="После завершения ядра CPU сможет забрать весь ответ."><span class="line-no" aria-hidden="true">33</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">34</span><span class="src"></span></span>
+<span class="source-line" data-what="Порядок опыта на CPU." data-how="Готовим данные, запускаем GPU, проверяем ответ." data-why="Служебные шаги отделены от работы ядра."><span class="line-no" aria-hidden="true">35</span><span class="src">int main() {</span></span>
+<span class="source-line" data-what="Готовим вход на CPU." data-how="Обе сборки получат одни и те же числа." data-why="Так сравниваем лимит регистров, а не разные входные данные."><span class="line-no" aria-hidden="true">36</span><span class="src"><span class="comment">    // Подготовить одинаковый вход для обеих сборок.</span></span></span>
+<span class="source-line" data-what="Размер работы." data-how="64 блока по 128 потоков, по 128 прибавлений к каждому числу." data-why="Размер запуска и задача не меняются между обычной сборкой и сборкой с лимитом."><span class="line-no" aria-hidden="true">37</span><span class="src">    constexpr int blocks = 64, threads = 128, steps = 128;</span></span>
+<span class="source-line" data-what="Число всех элементов." data-how="Для каждого потока выделено по values_per_thread чисел: всего 524 288." data-why="Столько элементов обработают и затем проверят обе версии."><span class="line-no" aria-hidden="true">38</span><span class="src">    constexpr int n = blocks * threads * values_per_thread;</span></span>
+<span class="source-line" data-what="Считаем размер буфера в байтах." data-how="Умножаем n на размер одного float." data-why="cudaMalloc и cudaMemcpy принимают байты, а не количество чисел."><span class="line-no" aria-hidden="true">39</span><span class="src">    constexpr size_t bytes = n * sizeof(float);</span></span>
+<span class="source-line" data-what="Готовим два массива на CPU." data-how="В каждом по n чисел float." data-why="В input задаём числа. В output позже скопируем результат с GPU и проверим его."><span class="line-no" aria-hidden="true">40</span><span class="src">    std::vector&lt;float&gt; input(n), output(n);</span></span>
+<span class="source-line" data-what="Заполняем вход числами от 0 до 16." data-how="В input[i] пишем i % 17, поэтому числа повторяются." data-why="Получаем небольшие float, к которым можно прибавлять единицу без ошибок округления."><span class="line-no" aria-hidden="true">41</span><span class="src">    for (int i = 0; i &lt; n; ++i) input[i] = float(i % 17);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">42</span><span class="src"></span></span>
+<span class="source-line" data-what="Заводим указатели на два буфера GPU." data-how="cudaMalloc запишет адреса в d_input и d_output." data-why="Источник и результат не перезаписывают друг друга."><span class="line-no" aria-hidden="true">43</span><span class="src">    float *d_input = nullptr, *d_output = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем входной буфер на GPU." data-how="CUDA записывает адрес в d_input. bytes — размер всех n чисел." data-why="Выделение происходит до замера."><span class="line-no" aria-hidden="true">44</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_input, bytes));</span></span>
+<span class="source-line" data-what="Выделяем выходной буфер на GPU." data-how="CUDA записывает адрес в d_output. Размер тот же: по одному результату на число." data-why="Выделение происходит до замера."><span class="line-no" aria-hidden="true">45</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;d_output, bytes));</span></span>
+<span class="source-line" data-what="Копируем вход на GPU." data-how="input.data() — адрес массива на CPU, d_input — куда копируем, bytes — сколько байтов." data-why="Сделаем это до замера, чтобы не считать время передачи."><span class="line-no" aria-hidden="true">46</span><span class="src">    check(<span class="call">cudaMemcpy</span>(d_input, input.data(), bytes, <span class="call">cudaMemcpyHostToDevice</span>));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">47</span><span class="src"></span></span>
+<span class="source-line" data-what="Сначала запускаем ядро для прогрева." data-how="Эти запуски поставим перед событием start." data-why="Время первых запусков не попадёт в замер."><span class="line-no" aria-hidden="true">48</span><span class="src"><span class="comment">    // Прогреть GPU до замера.</span></span></span>
+<span class="source-line" data-what="Двенадцать запусков для прогрева." data-how="CPU ставит их перед событием начала замера." data-why="Первый запуск не определяет показанное время."><span class="line-no" aria-hidden="true">49</span><span class="src">    for (int i = 0; i &lt; 12; ++i)</span></span>
+<span class="source-line" data-what="Запуск для прогрева." data-how="Запускаем то же ядро с теми же параметрами до метки start." data-why="Первый запуск не учитываем в замере."><span class="line-no" aria-hidden="true">50</span><span class="src">        add_steps&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(d_input, d_output, steps);</span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">51</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">52</span><span class="src"></span></span>
+<span class="source-line" data-what="Заводим два события CUDA: start и stop." data-how="Это дескрипторы: сначала создаём события, потом ставим их в ту же очередь, что и ядро." data-why="Нам нужен интервал на GPU, а не время вызова запуска на CPU."><span class="line-no" aria-hidden="true">53</span><span class="src">    <span class="call">cudaEvent_t</span> start, stop;</span></span>
+<span class="source-line" data-what="Создаём событие start." data-how="CUDA запишет дескриптор в start. Время отметим позже вызовом cudaEventRecord." data-why="Разделяем создание события и отметку начала серии."><span class="line-no" aria-hidden="true">54</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;start));</span></span>
+<span class="source-line" data-what="Создаём событие stop." data-how="CUDA запишет второй дескриптор в stop." data-why="По отметкам начала и конца узнаем длительность серии."><span class="line-no" aria-hidden="true">55</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">56</span><span class="src"></span></span>
+<span class="source-line" data-what="Теперь замеряем серию запусков." data-how="Ставим start перед серией, stop — после неё." data-why="Между отметками оставляем только запуски ядра."><span class="line-no" aria-hidden="true">57</span><span class="src"><span class="comment">    // Замерить серию одинаковых запусков на GPU.</span></span></span>
+<span class="source-line" data-what="Берём 100 запусков для замера." data-how="Между start и stop запускаем одно и то же ядро 100 раз." data-why="Один короткий запуск легко даёт шумный результат. Поэтому сравниваем среднее."><span class="line-no" aria-hidden="true">58</span><span class="src">    constexpr int launches = 100;</span></span>
+<span class="source-line" data-what="Ставим start перед серией." data-how="Очередь не передаём, значит, используем очередь по умолчанию (default stream). Отметка появится после прогрева." data-why="Прогрев и подготовка входа в замер не попадут."><span class="line-no" aria-hidden="true">59</span><span class="src">    check(<span class="call">cudaEventRecord</span>(start));</span></span>
+<span class="source-line" data-what="Ставим запуски по очереди." data-how="CPU повторяет вызов launches раз, все они идут в тот же stream." data-why="Измерим весь интервал между start и stop."><span class="line-no" aria-hidden="true">60</span><span class="src">    for (int i = 0; i &lt; launches; ++i)</span></span>
+<span class="source-line" data-what="Запуск внутри замера." data-how="Снова обрабатываем неизменный d_input. Используем те же blocks, threads и steps." data-why="Измеряем серию повторений одной работы."><span class="line-no" aria-hidden="true">61</span><span class="src">        add_steps&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(d_input, d_output, steps);</span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">62</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">63</span><span class="src"></span></span>
+<span class="source-line" data-what="Ставим stop за последним запуском." data-how="CUDA поставит отметку времени, когда в той же очереди закончатся все запуски серии." data-why="Копирование и проверка будут уже после метки."><span class="line-no" aria-hidden="true">64</span><span class="src">    check(<span class="call">cudaEventRecord</span>(stop));</span></span>
+<span class="source-line" data-what="Ждём событие stop." data-how="CPU ждёт, пока GPU дойдёт до stop. Значит, все запуски перед ним уже закончатся." data-why="Только теперь можно запросить длительность и читать результат."><span class="line-no" aria-hidden="true">65</span><span class="src">    check(<span class="call">cudaEventSynchronize</span>(stop));</span></span>
+<span class="source-line" data-what="Место для времени." data-how="cudaEventElapsedTime запишет в ms миллисекунды." data-why="Это время всей серии, не одного запуска."><span class="line-no" aria-hidden="true">66</span><span class="src">    float ms = 0.0f;</span></span>
+<span class="source-line" data-what="Узнаём, сколько шла серия." data-how="CUDA берёт разницу между start и stop и записывает её в ms в миллисекундах." data-why="Чтобы получить время одного запуска, в выводе делим на количество повторов."><span class="line-no" aria-hidden="true">67</span><span class="src">    check(<span class="call">cudaEventElapsedTime</span>(&amp;ms, start, stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">68</span><span class="src"></span></span>
+<span class="source-line" data-what="Закончили замер, теперь проверяем ответ." data-how="Копируем результат на CPU и сравниваем числа." data-why="Время этой проверки не прибавится ко времени ядра."><span class="line-no" aria-hidden="true">69</span><span class="src"><span class="comment">    // Проверить результат вне замера.</span></span></span>
+<span class="source-line" data-what="Забираем результат с GPU." data-how="Копируем bytes байт из d_output на GPU в output.data() на CPU." data-why="Передача на CPU происходит вне замера; теперь можно проверить значения."><span class="line-no" aria-hidden="true">70</span><span class="src">    check(<span class="call">cudaMemcpy</span>(output.data(), d_output, bytes, <span class="call">cudaMemcpyDeviceToHost</span>));</span></span>
+<span class="source-line" data-what="Начало проверки." data-how="Любое неверное значение ниже сбросит флаг." data-why="Время не считается подтверждением правильности."><span class="line-no" aria-hidden="true">71</span><span class="src">    bool correct = true;</span></span>
+<span class="source-line" data-what="Перебираем результаты." data-how="Проверяем все n элементов на CPU." data-why="Не ограничиваем проверку напечатанными числами."><span class="line-no" aria-hidden="true">72</span><span class="src">    for (int i = 0; i &lt; n; ++i)</span></span>
+<span class="source-line" data-what="Проверяем число с индексом i." data-how="В output[i] должно лежать input[i] + steps: к исходному числу прибавили 1 ровно steps раз." data-why="Сравнение времени имеет смысл только если обе сборки выполнили правильный расчёт."><span class="line-no" aria-hidden="true">73</span><span class="src">        if (output[i] != input[i] + steps) correct = false;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">74</span><span class="src"></span></span>
+<span class="source-line" data-what="Печать начала результата." data-how="Показываем четыре числа." data-why="Полная проверка выполнена выше."><span class="line-no" aria-hidden="true">75</span><span class="src">    std::printf("First four: [%g, %g, %g, %g]\n",</span></span>
+<span class="source-line" data-what="Четыре первых числа." data-how="Берём фактические результаты, скопированные с GPU." data-why="Можно увидеть проверяемый результат обеих сборок."><span class="line-no" aria-hidden="true">76</span><span class="src">                output[0], output[1], output[2], output[3]);</span></span>
+<span class="source-line" data-what="Печатаем итог проверки и время." data-how="Выводим число проверенных элементов и среднее время." data-why="Так можем сравнить обе сборки и сразу увидеть, если ответ неверный."><span class="line-no" aria-hidden="true">77</span><span class="src">    std::printf("%s: checked %d values; %.2f us/launch\n",</span></span>
+<span class="source-line" data-what="Статус, число проверок и время." data-how="ms — миллисекунды всей серии. Умножаем на 1000, чтобы получить микросекунды, и делим на launches." data-why="Сравниваем среднее время одной и той же работы."><span class="line-no" aria-hidden="true">78</span><span class="src">                correct ? "PASS" : "FAIL", n, ms * 1000 / launches);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">79</span><span class="src"></span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">80</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(start));</span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">81</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(stop));</span></span>
+<span class="source-line" data-what="Освобождаем выходной буфер на GPU." data-how="Передаём cudaFree адрес d_output, полученный от cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">82</span><span class="src">    check(<span class="call">cudaFree</span>(d_output));</span></span>
+<span class="source-line" data-what="Освобождаем входной буфер на GPU." data-how="Передаём cudaFree адрес d_input. Больше ядро не запускаем." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">83</span><span class="src">    check(<span class="call">cudaFree</span>(d_input));</span></span>
+<span class="source-line" data-what="Код завершения." data-how="Успех — только при правильных результатах." data-why="Ошибка даёт ненулевой статус."><span class="line-no" aria-hidden="true">84</span><span class="src">    return correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Закончили main." data-how="Результат проверили, ресурсы освободили." data-why="Оболочка получит код выхода из строки выше."><span class="line-no" aria-hidden="true">85</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="registers-run-title">
+    <h2 id="registers-run-title">Запуск: что меняет лимит регистров</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 -Xptxas=-v 04_registers_local.cu -o registers
+./registers
+
+nvcc -std=c++17 -O3 -arch=sm_75 -Xptxas=-v --maxrregcount=32 04_registers_local.cu -o registers_capped
+./registers_capped</code></pre>
+    <p>В обеих сборках добавляем <code>-Xptxas=-v</code>, чтобы увидеть отчёт компилятора. Во второй задаём лимит флагом <code>--maxrregcount=32</code>. На Quadro RTX 6000 с CUDA 13.1 отчёт вышел таким:</p>
+    <pre><code>Без лимита: 72 регистра; 0 spill stores, 0 spill loads
+С лимитом: 32 регистра; 976 Б spill stores, 1012 Б spill loads</code></pre>
+    <p>Сначала посмотри на <code>spill stores</code> и <code>spill loads</code>: с лимитом там уже не нули. Компилятор добавил запись части чисел в локальную память и чтение обратно. Эти числа он печатает при сборке, ещё до запуска ядра.</p>
+    <p>Теперь запускаем обе версии. В начале массива получаем <code>[128, 129, 130, 131]</code>: к <code>[0, 1, 2, 3]</code> прибавили 128. Программа проверяет все 524 288 чисел. Теперь сравни среднее время запуска: <strong>15,82 мкс без лимита и 186,58 мкс с лимитом</strong> по CUDA Events. После прогрева замеряем 100 запусков; ответ копируем и проверяем уже после замера.</p>
+    <details>
+      <summary>Дополнительно: что будет без разворачивания циклов</summary>
+      <p>Мы посмотрели машинный код: с лимитом появились инструкции чтения и записи local memory, без лимита их не было.</p>
+      <p><strong>А если убрать <code>#pragma unroll</code>?</strong> В CUDA 13.1 без лимита мы убрали все три директивы. Компилятор всё равно обошёлся без local memory. Затем явно запретили разворачивать эти циклы. В отчёте видим 256 байт стека, а в <code>spill stores</code> и <code>spill loads</code> стоят нули. Индекс <code>i</code> меняется во время выполнения цикла, и компилятор в этой сборке сразу положил массив в локальную память.</p>
+      <p><a href="https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#printing-code-generation-statistics">Документация NVIDIA: отчёт компилятора</a></p>
+    </details>
+  </section>
+</article>
+  <nav class="lesson-nav" aria-label="Навигация лекции"><a href="index.html">← Все листинги лекции</a></nav>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script src="lesson.js"></script>
+</body>
+</html>

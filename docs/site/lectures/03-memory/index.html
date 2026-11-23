@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Память в CUDA: девять примеров · Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><span aria-current="page">Лекция 03</span></li>
+    </ol>
+  </nav>
+  <header class="hero">
+    <p class="kicker">CUDA / Лекция 03</p>
+    <h1>Память в CUDA: девять примеров</h1>
+    <p class="lead">Как передать массив между CPU и GPU? Зачем иначе размещать числа, если результат тот же? Разберём на коротких программах.</p>
+    <p>Сначала посмотри на схему, потом прочитай пояснения рядом с кодом. Скачай <code>.cu</code> и выполни команды из раздела «Запуск» в папке с этим файлом. Под командами — что искать в выводе.</p>
+  </header>
+  <nav id="lessons" aria-label="Листинги лекции">
+    <ol class="lesson-overview">
+      <li><a href="01_transfer.html">01 · Копируем массив с GPU на CPU: когда можно читать?</a><p>Ставим копию в очередь и сразу идём дальше. Разбираем, где нужно подождать, чтобы прочитать все числа.</p></li>
+      <li><a href="01_transfer.html#pool-title">02 · Пул памяти GPU: что остаётся после возврата буфера?</a><p>Дважды берём по 1 МиБ. Смотрим, нужна ли пулу новая память при втором запросе.</p></li>
+      <li><a href="03_managed.html">03 · Один массив для CPU и GPU</a><p>Через Unified Memory прибавляем 1 на GPU и читаем тот же массив на CPU без вызова <code>cudaMemcpy</code>.</p></li>
+      <li><a href="04_registers_local.html">04 · Что происходит, когда не хватает регистров?</a><p>Ограничиваем число регистров при сборке. Смотрим, понадобилась ли локальная память и как меняется время.</p></li>
+      <li><a href="05_coalescing.html">05 · Удваиваем x: массив векторов или отдельный массив?</a><p>Сравниваем AoS и SoA: какие адреса читают потоки и почему одно ядро работает быстрее другого.</p></li>
+      <li><a href="06_bank_conflict.html">06 · Конфликт банков: зачем добавлять пустой столбец?</a><p>Читаем первый столбец из shared memory. Числа те же, а при ширине 33 вместо 32 работают разные банки.</p></li>
+      <li><a href="07_constant.html">07 · Константная память: один адрес на warp или 32?</a><p>Каждый поток считает ту же сумму. Сравниваем время, когда потоки читают одну ячейку за шаг и когда читают разные.</p></li>
+      <li><a href="08_texture_surface.html">08 · Texture: читаем между четырьмя пикселями</a><p>Ставим точку в центр массива 2×2 и получаем число, которого нет ни в одной ячейке.</p></li>
+      <li><a href="08_texture_surface.html#surface">09 · Surface: заполняем CUDA-массив четырьмя потоками</a><p>Каждый поток пишет одно число. Разбираем, почему X указываем в байтах, а Y — в строках.</p></li>
+    </ol>
+  </nav>
+  <section class="run cluster-practice" aria-labelledby="build-environment">
+    <h2 id="build-environment">Сборка и запуск на кластере</h2>
+    <p>Мы собрали и запустили все девять примеров на кластере «Громозека»: CUDA Toolkit 13.1, видеокарта NVIDIA Quadro RTX 6000. В командах <code>-arch=sm_75</code> — архитектура этой карты. Если архитектура твоей видеокарты другая, подставь её в <code>-arch</code>.</p>
+    <details>
+      <summary>Дополнительно: проверка памяти и профилирование</summary>
+      <p>Эти инструменты разберём в следующих лекциях. Для первого запуска они не нужны.</p>
+      <p>Хочешь проверить обращения к памяти? Собери <code>transfer</code> по <a href="01_transfer.html#run-title">команде на странице примера</a> и запусти:</p>
+      <pre><code>compute-sanitizer --tool memcheck \
+  --error-exitcode 99 ./transfer</code></pre>
+      <p>После массива посмотри на строку <code>ERROR SUMMARY</code>: там видно, нашёл ли <code>memcheck</code> ошибки при обращении к памяти.</p>
+    </details>
+  </section>
+</main>
+</body>
+</html>

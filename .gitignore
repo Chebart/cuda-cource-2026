@@ -69,11 +69,13 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/_build/
-
-# Local operations notes
-/docs/GPU_CI_OPERATIONS.md
+# Ignore new local documentation; keep the Pages site and existing student guides.
+/docs/*
+!/docs/site/
+!/docs/FOLDER_STRUCTURE.md
+!/docs/STUDENT_TEMPLATE.md
+!/docs/SUBMISSIONS.md
+!/docs/SUBMISSION_CONTRACT.md
 
 # PyBuilder
 .pybuilder/

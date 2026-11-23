@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Как пустой столбец убирает конфликт банков · CUDA / Лекция 03</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #181421;
+      --muted: #5f566d;
+      --line: #e9e2ee;
+      --violet: #792ce6;
+      --violet-line: #ba8df6;
+      --violet-wash: #f2e9ff;
+      --green: #197e60;
+      --green-wash: #e2f5ed;
+      --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+      font: 16px/1.5 system-ui, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; background: #fcfcfb; color: var(--ink); }
+    main { width: min(1200px, calc(100% - 64px)); margin: 0 auto; }
+    button, input { font: inherit; }
+    button { color: inherit; cursor: pointer; }
+    :focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; }
+    code, kbd, samp { font-family: var(--mono); }
+    .hero { position: relative; isolation: isolate; overflow: hidden; padding: 35px 0 30px; }
+    .hero::before, .hero::after {
+      position: absolute; content: ''; z-index: -1; pointer-events: none;
+      inset: auto -92px 12px auto; width: 446px; height: 125px;
+      border: 1px solid #dcc1fc; border-radius: 90px; transform: rotate(-36deg);
+    }
+    .hero::after { right: -109px; bottom: 26px; }
+    .eyebrow { margin: 0; color: #6523c4; font: 700 .75rem/1.45 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .hero h1 { margin: 14px 0 9px; max-width: 740px; font-size: clamp(2.2rem, 6vw, 4.5rem); line-height: 1; letter-spacing: -.06em; }
+    .hero p:last-child { max-width: 61ch; margin: 0; color: var(--muted); }
+    .listing {
+      background: #fff; border: 1px solid var(--violet-line); border-radius: 26px;
+      box-shadow: 0 16px 44px -36px #792ce677;
+    }
+    .listing-head {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 22px;
+      padding: 15px 22px; border-bottom: 1px solid var(--line);
+    }
+    .listing-head p { margin: 0; font-size: .88rem; font-weight: 650; }
+    .listing-head p span { font-weight: 400; color: var(--muted); }
+    .width-control { display: flex; align-items: center; gap: 9px; }
+    .width-control > span { font-size: .81rem; color: var(--muted); }
+    .choices { display: flex; gap: 2px; padding: 3px; border-radius: 10px; border: 1px solid var(--line); background: #faf7fd; }
+    .choices label { position: relative; }
+    .choices input { position: absolute; opacity: 0; width: 100%; height: 100%; inset: 0; margin: 0; cursor: pointer; }
+    .choices span {
+      display: block; padding: 6px 11px; border-radius: 7px; font: 700 .8rem/1.3 var(--mono);
+      transition: background-color .18s, color .18s;
+    }
+    .choices input:checked + span { background: var(--violet-wash); color: #53209b; box-shadow: 0 0 0 1px #e0cbfb inset; }
+    .choices input:focus-visible + span { outline: 2px solid var(--violet); outline-offset: 2px; }
+    .workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); }
+    .editor, .model { min-width: 0; padding: 21px; }
+    .model { border-left: 1px solid var(--line); }
+    .panel-label { margin: 0 0 13px; color: var(--muted); font: 700 .74rem/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .codebox { background: #1d1923; color: #f7f0ff; border-radius: 13px; overflow: hidden; }
+    .codehead {
+      display: flex; justify-content: space-between; gap: 8px; align-items: center;
+      min-height: 47px; padding: 8px 13px; border-bottom: 1px solid #3d3447; color: #d4c6df;
+      font: .76rem/1.3 var(--mono);
+    }
+    .copy { color: #f2e5ff; background: #30263b; border: 1px solid #51435d; border-radius: 6px; padding: 5px 8px; }
+    .copy:hover { background: #423351; }
+    .code-scroll { overflow-x: auto; padding: 11px 0 14px; }
+    .code-line.code-gap { min-height: .8rem; }
+    .source { min-width: max-content; }
+    .code-line { display: grid; grid-template-columns: 38px 1fr; align-items: center; min-height: 32px; border-left: 3px solid transparent; padding-right: 12px; transition: background-color .18s, border-color .18s; }
+    .code-line.is-active { background: #37274a; border-left-color: #cc9dff; }
+    .code-line code { white-space: pre; font-size: clamp(.76rem, 1.15vw, .93rem); line-height: 1.9; user-select: text; }
+    .gutter { color: #ad9db9; text-align: center; font: .72rem/1 var(--mono); }
+    button.gutter { justify-self: center; width: 27px; height: 25px; padding: 0; border-radius: 5px; border: 1px solid #5e4b70; background: #2f233b; color: #ead6ff; }
+    button.gutter:hover, button.gutter[aria-pressed="true"] { background: #d6afff; color: #28143a; border-color: #d6afff; }
+    .codebox :focus-visible { outline-color: #e4c4ff; outline-offset: 2px; }
+    .keyword { color: #dbb5ff; }
+    .numeric { color: #b6edcb; }
+    .inline-width {
+      font: inherit; line-height: 1.3; color: #d9f8e4; padding: 1px 3px; margin: 0 -3px;
+      background: #355044; border: 0; border-radius: 4px; user-select: text;
+    }
+    .inline-width:hover { background: #456958; }
+    .editor-note { margin: 12px 0 0; color: var(--muted); font-size: .84rem; }
+    .editor-note code { font-size: .83em; }
+    .model h2 { margin: 0 0 5px; font-size: clamp(1.22rem, 2.2vw, 1.63rem); letter-spacing: -.035em; line-height: 1.15; }
+    .phase-description { min-height: 3em; margin: 0 0 9px; color: var(--muted); font-size: .88rem; }
+    .result {
+      display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap;
+      padding: 9px 12px; border-radius: 9px; background: #f3f0f5; font-size: .83rem;
+      transition: background-color .2s;
+    }
+    .result[data-kind="conflict"] { background: var(--violet-wash); }
+    .result[data-kind="clear"] { background: var(--green-wash); }
+    .result strong { font-weight: 750; }
+    .result span { color: var(--muted); }
+    .mapping { margin: 14px 0 0; }
+    .grid-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 10px 0 5px; font-size: .8rem; }
+    .grid-label span { color: var(--muted); font-size: .72rem; text-align: right; }
+    .cells { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; }
+    .cell {
+      min-width: 0; min-height: 26px; padding: 0; display: grid; place-items: center;
+      border: 1px solid transparent; border-radius: 5px; background: #f5f2f8;
+      color: var(--muted); font: .73rem/1 var(--mono); font-variant-numeric: tabular-nums;
+      transition: background-color .18s, border-color .18s, color .18s;
+    }
+    button.cell:not(:disabled):hover { background: var(--violet-wash); border-color: var(--violet-line); color: var(--ink); }
+    .lane:disabled { cursor: default; opacity: .65; }
+    .lane[aria-pressed="true"] { background: #eadbff; border-color: var(--violet); color: var(--ink); font-weight: 700; }
+    .bank[data-load="many"] { background: var(--violet-wash); }
+    .bank[data-load="one"] { background: var(--green-wash); }
+    .bank[data-selected="true"] { border-color: var(--violet); color: var(--ink); font-weight: 750; }
+    .bank[data-selected="true"][data-load="one"] { border-color: var(--green); }
+    .address {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px;
+      min-height: 36px; padding: 6px 8px; margin: 8px 0 0; border-radius: 6px;
+      background: #faf8fc; font: .75rem/1.35 var(--mono);
+    }
+    .address code { flex-basis: 100%; }
+    .address span { color: var(--muted); }
+    .address[hidden] { display: none; }
+    .listing-foot {
+      margin: 0; padding: 11px 22px; color: var(--muted); border-top: 1px solid var(--line);
+      font-size: .76rem;
+    }
+    .takeaway { margin: 18px 0 26px; padding-left: 12px; border-left: 2px solid var(--violet); font-size: .88rem; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; white-space: nowrap; clip-path: inset(50%); }
+    @media (max-width: 1110px) { .cells { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+    @media (max-width: 790px) {
+      main { width: min(100% - 28px, 620px); }
+      .hero { padding-top: 23px; }
+      .hero::before, .hero::after { opacity: .52; }
+      .workbench { grid-template-columns: minmax(0, 1fr); }
+      .model { border-left: 0; border-top: 1px solid var(--line); }
+      .listing-head, .editor, .model, .listing-foot { padding-left: 14px; padding-right: 14px; }
+      .cells { gap: 4px; }
+      .cell { min-height: 29px; }
+      .phase-description { min-height: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+  </style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Схема банков</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#bank-demo">Схема с переключателем</a>
+    <a href="06_bank_conflict.html">Пример с замером</a>
+  </nav>
+    <header class="hero">
+      <p class="eyebrow">CUDA / Лекция 03 / Shared memory</p>
+      <h1>Как пустой столбец убирает конфликт банков</h1>
+      <p>Читаем первый столбец тайла (куска матрицы) в shared memory. Нажми на номер строки 10. Затем переключи ширину с 32 на <code>32 + 1</code> и посмотри, сколько банков участвует в чтении. Числа те же, а при ширине 33 у каждого потока свой банк.</p>
+    </header>
+
+    <section class="listing" id="bank-demo" aria-label="Интерактивный фрагмент: конфликт банков">
+      <header class="listing-head">
+        <p>Сравниваем ширину 32 и 33 <span>· один блок, один warp</span></p>
+        <div class="width-control" role="group" aria-labelledby="width-label">
+          <span id="width-label">Ширина строки тайла</span>
+          <div class="choices">
+            <label><input type="radio" name="width" value="32" checked><span>32</span></label>
+            <label><input type="radio" name="width" value="33"><span>32 + 1</span></label>
+          </div>
+        </div>
+      </header>
+      <div class="workbench">
+        <section class="editor" aria-labelledby="code-title">
+          <h2 class="panel-label" id="code-title">Код записи и чтения</h2>
+          <div class="codebox">
+            <div class="codehead"><span>Ядро demo</span><button class="copy" type="button" id="copy">Скопировать</button></div>
+            <div class="code-scroll">
+              <div class="source" id="source">
+                <div class="code-line"><span class="gutter" aria-hidden="true">1</span><code><span class="keyword">__global__ void</span> demo(float* out) {</code></div>
+                <div class="code-line"><span class="gutter" aria-hidden="true">2</span><code>  <span class="keyword">__shared__ float</span> tile[<span class="numeric">32</span>][<button type="button" class="inline-width" title="Ширина строки 32. Переключи на 32 плюс 1" id="inline-width" aria-label="Ширина строки 32. Переключи на 32 плюс 1">32</button>];</code></div>
+                <div class="code-line"><span class="gutter" aria-hidden="true">3</span><code>  <span class="keyword">int</span> lane = threadIdx.x;</code></div>
+                <div class="code-line code-gap"><span class="gutter" aria-hidden="true">4</span><code></code></div>
+                <div class="code-line"><span class="gutter" aria-hidden="true">5</span><code>  <span class="keyword">for</span> (<span class="keyword">int</span> row = 0; row &lt; 32; ++row)</code></div>
+                <div class="code-line is-active" data-phase-line="write"><button type="button" class="gutter" data-phase="write" aria-label="Строка 6: пишем в строку тайла с индексом 2" aria-pressed="true">6</button><code>    tile[row][lane] = row * 32 + lane;</code></div>
+                <div class="code-line code-gap"><span class="gutter" aria-hidden="true">7</span><code></code></div>
+                <div class="code-line" data-phase-line="barrier"><button type="button" class="gutter" data-phase="barrier" aria-label="Строка 8: ждём, пока все потоки запишут тайл" aria-pressed="false">8</button><code>  <span class="keyword">__syncthreads</span>();</code></div>
+                <div class="code-line code-gap"><span class="gutter" aria-hidden="true">9</span><code></code></div>
+                <div class="code-line" data-phase-line="read"><button type="button" class="gutter" data-phase="read" aria-label="Строка 10: читаем первый столбец и пишем числа в out" aria-pressed="false">10</button><code>  out[lane] = tile[lane][<span class="numeric">0</span>];</code></div>
+                <div class="code-line"><span class="gutter" aria-hidden="true">11</span><code>}</code></div>
+              </div>
+            </div>
+          </div>
+          <p class="editor-note">Нажимай на номера строк: 6 — запись, 8 — барьер, 10 — чтение. Чтобы поменять ширину, нажми на второе число в объявлении <code>tile</code>. На телефоне после переключения прокрути ниже, до блока «Читаем первый столбец», и посмотри, сколько банков участвует в чтении. Здесь считаем числа в ядре, а в полном примере берём их из <code>input</code>. Для запуска <code>demo&lt;&lt;&lt;1, 32&gt;&gt;&gt;(out)</code> заранее выдели на GPU массив <code>out</code> на 32 <code>float</code>.</p>
+          <span id="copy-status" class="sr-only" role="status"></span>
+        </section>
+        <section class="model" aria-labelledby="phase-title">
+          <p class="panel-label" id="phase-label">Шаг 01 / 03</p>
+          <h2 id="phase-title">Записываем одну строку</h2>
+          <p class="phase-description" id="phase-description">Смотрим на строку с индексом 2. Соседние потоки пишут в соседние ячейки — в разные банки.</p>
+          <div class="result" data-kind="clear" id="result" role="status">
+            <strong id="result-title">Без конфликта: 32 из 32 банков</strong><span id="result-detail">По одному слову на банк</span>
+          </div>
+          <div class="mapping" id="mapping">
+            <div class="grid-label"><strong id="lanes-label">Потоки warp</strong><span id="lane-caption">выбери поток · стрелки с клавиатуры</span></div>
+            <div class="cells" id="lanes" role="group" aria-labelledby="lanes-label"></div>
+            <div class="grid-label"><strong id="banks-label">Банки shared memory</strong><span id="bank-caption">выделен банк выбранного потока</span></div>
+            <div class="cells" id="banks" role="list" aria-labelledby="banks-label"></div>
+          </div>
+          <div class="address" id="address" role="status">
+            <code id="element">tile[2][2]</code><code id="word">индекс слова: 2 × 32 + 2 = 66</code><code id="value">значение: 2 × 32 + 2 = 66</code><code id="bank">банк: 66 % 32 = 2</code>
+          </div>
+          <noscript><p>Для переключения шагов нужен JavaScript. Вот что получится на записи: поток 2 пишет число 66 в <code>tile[2][2]</code>. При ширине 32 это слово 66, при ширине 33 — слово 68. При чтении первого столбца берём слова 0, 32, 64… для ширины 32 и 0, 33, 66… для ширины 33.</p></noscript>
+        </section>
+      </div>
+      <p class="listing-foot">В shared memory здесь 32 банка. Разные банки могут работать одновременно. Чтобы узнать номер банка, считаем 4-байтные слова от начала <code>tile</code> и берём остаток от деления индекса слова на 32. Число, которое лежит в ячейке, для этого не нужно.</p>
+    </section>
+    <p class="takeaway"><strong>Зачем нужен пустой столбец?</strong> Добавили по ячейке в конце каждой строки. Это padding: мы эти ячейки не заполняем и не читаем. Теперь между началами строк 33 слова вместо 32, а числа те же. За это тратим ещё 128 байт shared memory на блок.</p>
+  </main>
+  <script>
+    'use strict';
+    const get = id => document.getElementById(id);
+    const phases = {
+      write: {
+        number: '01', title: 'Записываем одну строку',
+        description: 'Смотрим на строку с индексом 2. Соседние потоки пишут в соседние ячейки — в разные банки.'
+      },
+      barrier: {
+        number: '02', title: 'Ждём у барьера',
+        description: 'У __syncthreads() ждём, пока сюда дойдут все потоки блока. После этого им видны записанные числа. На самом барьере тайл не читаем и не меняем.'
+      },
+      read: {
+        number: '03', title: 'Читаем первый столбец',
+        description: 'Поток lane берёт первое число из своей строки, tile[lane][0], и пишет его в out[lane]. При ширине 32 слова одного банка читаем по очереди. При ширине 33 у каждого потока свой банк.'
+      }
+    };
+    let width = 32;
+    let phase = 'write';
+    let selected = 2;
+    const laneGrid = get('lanes');
+    const bankGrid = get('banks');
+    const radios = [...document.querySelectorAll('input[name="width"]')];
+    const phaseButtons = [...document.querySelectorAll('button[data-phase]')];
+    const inlineWidth = get('inline-width');
+
+    function accessFor(lane) {
+      const row = phase === 'write' ? 2 : lane;
+      const column = phase === 'write' ? lane : 0;
+      const word = row * width + column;
+      return { row, column, word, value: row * 32 + column, bank: word % 32 };
+    }
+
+    const lanes = [];
+    const banks = [];
+    for (let i = 0; i < 32; ++i) {
+      const lane = document.createElement('button');
+      lane.type = 'button';
+      lane.className = 'cell lane';
+      lane.textContent = i;
+      lane.addEventListener('click', () => selectLane(i));
+      lane.addEventListener('keydown', event => {
+        const columns = getComputedStyle(laneGrid).gridTemplateColumns.split(' ').length;
+        const next = { ArrowLeft: i - 1, ArrowRight: i + 1, ArrowUp: i - columns,
+          ArrowDown: i + columns, Home: 0, End: 31 }[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        const target = Math.min(31, Math.max(0, next));
+        selectLane(target);
+        lanes[target].focus();
+      });
+      laneGrid.append(lane);
+      lanes.push(lane);
+      const bank = document.createElement('div');
+      bank.className = 'cell bank';
+      bank.setAttribute('role', 'listitem');
+      bank.textContent = i;
+      bankGrid.append(bank);
+      banks.push(bank);
+    }
+
+    function selectLane(lane) {
+      if (phase === 'barrier') return;
+      selected = lane;
+      renderMapping();
+    }
+
+    function renderMapping() {
+      const active = phase !== 'barrier';
+      const accesses = active ? lanes.map((_, i) => accessFor(i)) : [];
+      const counts = Array(32).fill(0);
+      for (const access of accesses) counts[access.bank]++;
+      const target = accesses[selected];
+      lanes.forEach((lane, i) => {
+        lane.disabled = !active;
+        lane.tabIndex = active && i === selected ? 0 : -1;
+        lane.setAttribute('aria-pressed', String(active && i === selected));
+        const detail = active ? `, индекс слова ${accesses[i].word}, значение ${accesses[i].value}, банк ${accesses[i].bank}` : ', ждёт у барьера';
+        lane.setAttribute('aria-label', `Поток ${i}${detail}`);
+        lane.title = lane.getAttribute('aria-label');
+      });
+      banks.forEach((bank, i) => {
+        bank.dataset.load = counts[i] > 1 ? 'many' : counts[i] === 1 ? 'one' : 'idle';
+        bank.dataset.selected = String(target?.bank === i);
+        bank.title = `Банк ${i}: обращений к разным словам — ${counts[i]}`;
+        bank.setAttribute('aria-label', bank.title);
+      });
+      const occupied = counts.filter(count => count > 0).length;
+      const conflict = counts.some(count => count > 1);
+      get('result').dataset.kind = !active ? 'idle' : conflict ? 'conflict' : 'clear';
+      get('result-title').textContent = !active ? 'Не читаем и не пишем тайл' :
+        `${conflict ? 'Конфликт' : 'Без конфликта'}: ${occupied} из 32 банков`;
+      get('result-detail').textContent = !active ? 'Потоки ждут друг друга' :
+        conflict ? 'Один банк читает 32 разных слова по очереди' : 'По одному слову на банк';
+      get('bank-caption').textContent = active ? 'выделен банк выбранного потока' : 'к банкам не обращаемся';
+      get('lane-caption').textContent = active ? 'выбери поток · стрелки с клавиатуры' : 'у барьера поток выбрать нельзя';
+      get('address').hidden = !active;
+      if (target) {
+        get('element').textContent = `tile[${target.row}][${target.column}]`;
+        get('word').textContent = `индекс слова: ${target.row} × ${width} + ${target.column} = ${target.word}`;
+        get('value').textContent = `значение: ${target.row} × 32 + ${target.column} = ${target.value}`;
+        get('bank').textContent = `банк: ${target.word} % 32 = ${target.bank}`;
+      }
+    }
+
+    function setPhase(next) {
+      phase = next;
+      for (const button of phaseButtons) {
+        const active = button.dataset.phase === phase;
+        button.setAttribute('aria-pressed', String(active));
+        button.closest('.code-line').classList.toggle('is-active', active);
+      }
+      get('phase-label').textContent = `Шаг ${phases[phase].number} / 03`;
+      get('phase-title').textContent = phases[phase].title;
+      get('phase-description').textContent = phases[phase].description;
+      renderMapping();
+    }
+
+    function setWidth(next) {
+      width = next;
+      radios.forEach(radio => { radio.checked = Number(radio.value) === width; });
+      inlineWidth.textContent = width === 32 ? '32' : '32 + 1';
+      inlineWidth.setAttribute('aria-label', width === 32 ?
+        'Ширина строки 32. Переключи на 32 плюс 1' : 'Ширина строки 33. Переключи на 32');
+      inlineWidth.title = inlineWidth.getAttribute('aria-label');
+      renderMapping();
+      const address = get('address');
+      address.getAnimations().forEach(animation => animation.cancel());
+      if (phase !== 'barrier' && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        address.animate([{ opacity: .58 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+      }
+    }
+
+    for (const radio of radios) radio.addEventListener('change', () => setWidth(Number(radio.value)));
+    for (const button of phaseButtons) button.addEventListener('click', () => setPhase(button.dataset.phase));
+    inlineWidth.addEventListener('click', () => setWidth(width === 32 ? 33 : 32));
+    get('copy').addEventListener('click', async () => {
+      const text = [...get('source').querySelectorAll('code')].map(line => line.textContent).join('\n') + '\n';
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch {
+        const fallback = document.createElement('textarea');
+        fallback.value = text;
+        fallback.className = 'sr-only';
+        document.body.append(fallback);
+        fallback.select();
+        try {
+          copied = document.execCommand('copy');
+        } catch {
+          copied = false;
+        } finally {
+          fallback.remove();
+          get('copy').focus();
+        }
+      }
+      get('copy-status').textContent = copied ? 'Код скопирован' : 'Не получилось скопировать. Выдели код и скопируй вручную';
+      get('copy').textContent = copied ? 'Скопировано' : 'Скопируй вручную';
+    });
+    setPhase(phase);
+  </script>
+</body>
+</html>

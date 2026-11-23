@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Константная память: один адрес на warp или 32? · CUDA / Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+<style>
+  .constant-hero .kicker,
+  #constant :is(.figure-note, .diagram-mark, .line-no, .hint-how, .code-frame figcaption, code) { font-size: 1rem; }
+  #constant .line-no { line-height: 1.6; }
+</style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Пример 07</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#constant-flow-title">Схема</a>
+    <a href="#constant-listing-title">Код</a>
+    <a href="#constant-run-title">Запуск</a>
+  </nav>
+<header class="hero constant-hero">
+  <p class="kicker">CUDA / Лекция 03 / Листинг 07</p>
+  <h1>Константная память: один адрес на warp или 32?</h1>
+  <p class="lead">Каждый поток складывает числа от 1 до 32 из одной таблицы. Сумма должна быть <code>528</code> в обеих версиях. Меняем только порядок чтения: либо на каждом шаге весь warp читает одну ячейку, либо каждый поток читает свою. Сравним время.</p>
+</header>
+<article class="lesson-unit" id="constant">
+  <section class="flow" aria-labelledby="constant-flow-title">
+    <h2 id="constant-flow-title">Те же числа, разный порядок чтения</h2>
+    <p class="flow-intro">До запуска копируем таблицу с CPU в <strong>constant memory</strong>. Без сдвига все потоки начинают с <code>table[0]</code>. Со сдвигом поток 0 начинает с <code>table[0]</code>, поток 1 — с <code>table[1]</code> и так далее. Дойдя до конца, продолжаем с начала, пока не прочитаем все 32 числа.</p>
+    <figure class="flow-figure" aria-labelledby="constant-figure-title">
+      <figcaption id="constant-figure-title">Что потоки читают на первом шаге</figcaption>
+      <div class="diagram-grid">
+        <section class="diagram-panel" aria-labelledby="constant-broadcast-title">
+          <h3 id="constant-broadcast-title">Без сдвига: все начинают с ячейки 0</h3>
+          <div class="diagram-strip"><span class="diagram-mark">Потоки 0, 1, …, 31</span><span aria-hidden="true">→</span><span class="diagram-mark active">table[0]</span></div>
+          <p>На следующем шаге все вместе читают <code>table[1]</code>. GPU может взять число по одному адресу и раздать его всему warp. Это <strong>broadcast</strong>.</p>
+        </section>
+        <section class="diagram-panel" aria-labelledby="constant-shift-title">
+          <h3 id="constant-shift-title">Со сдвигом: каждый начинает со своей ячейки</h3>
+          <div class="diagram-strip"><span class="diagram-mark">0 → table[0]</span><span class="diagram-mark">1 → table[1]</span><span>…</span><span class="diagram-mark">31 → table[31]</span></div>
+          <p>На следующем шаге поток 31 переходит к <code>table[0]</code>, а поток 0 — к <code>table[1]</code>. У каждого по-прежнему свой адрес, поэтому GPU обрабатывает их по отдельности.</p>
+        </section>
+      </div>
+      <p class="figure-note">Важно, куда потоки обращаются на одном шаге. Даже если в двух ячейках лежит одно число, это всё равно два разных адреса, и одного broadcast не хватит. <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#constant-memory">Правило в руководстве NVIDIA</a>.</p>
+    </figure>
+    <p class="flow-note"><strong>Почему нет гонки:</strong> таблицу заполняем до запуска. В ядре её только читаем, а сумму каждый поток пишет в свою ячейку <code>output[tid]</code>. Запуски идут друг за другом в одной очереди. Разные адреса влияют на время, но не портят ответ.</p>
+  </section>
+  <section class="listing" aria-labelledby="constant-listing-title">
+    <div class="listing-header">
+      <h2 id="constant-listing-title">Код: одна сумма, два порядка чтения</h2>
+      <div class="actions"><a href="07_constant.cu" download>Скачать .cu</a><button type="button" data-copy="constant-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div>
+    </div>
+    <div class="listing-grid">
+      <aside class="reading">
+        <h3>Как выбираем первую ячейку</h3>
+        <p><a href="#constant-table">Строка 6</a>: заводим таблицу <code>__constant__</code>. До запуска скопируем в неё числа с CPU.</p>
+        <p><a href="#constant-shift">Строка 17</a>: без сдвига начинаем с ячейки 0, со сдвигом — с ячейки с номером потока внутри warp (<code>lane</code>).</p>
+        <p><a href="#constant-common">Строка 22</a>: после ячейки 31 возвращаемся к ячейке 0 с помощью <code>% 32</code>. Так каждый складывает все 32 числа.</p>
+      </aside>
+      <figure class="code-frame" id="constant-code">
+  <figcaption>07_constant.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем заголовок CUDA Runtime." data-how="В нём объявлены функции для работы с памятью, событиями и ошибками." data-why="Они нужны, чтобы подготовить данные и замерить работу ядра."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Вывод результата." data-how="Объявляет std::printf и std::fprintf." data-why="Печатаем время, ответы и ошибки."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Завершение программы." data-how="Объявляет std::exit и коды завершения." data-why="Сбой не должен выглядеть как успешная проверка."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line" data-what="Массивы на CPU." data-how="std::vector хранит элементы подряд; data() даёт указатель на начало." data-why="Удобно выделить большие буферы вне стека."><span class="line-no" aria-hidden="true">4</span><span class="src">#include &lt;vector&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">5</span><span class="src"></span></span>
+<span class="source-line key" id="constant-table" data-what="Заводим таблицу из 32 int в constant memory." data-how="CPU запишет числа в table до запуска. Ядро может их только читать. Обычный const в C++ сам по себе не помещает данные в эту память." data-why="Если потоки одного warp читают один адрес, GPU может раздать им одно значение."><span class="line-no" aria-hidden="true">6</span><span class="src"><span class="call">__constant__</span> int table[32];</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">7</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Не продолжаем замер после ошибки."><span class="line-no" aria-hidden="true">8</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Если нет, следующие строки напечатают ошибку."><span class="line-no" aria-hidden="true">9</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печать ошибки CUDA." data-how="cudaGetErrorString переводит статус в текст." data-why="Видно, почему программа остановилась."><span class="line-no" aria-hidden="true">10</span><span class="src">    std::fprintf(stderr, "%s\n", <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Остановка с ошибкой." data-how="Возвращаем оболочке код неудачи." data-why="Не продолжаем замер после сбоя."><span class="line-no" aria-hidden="true">11</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Закончили check." data-how="При ошибке программа уже остановилась. Без ошибки вышли через return." data-why="Дальше — ядро, которое читает таблицу."><span class="line-no" aria-hidden="true">12</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">13</span><span class="src"></span></span>
+<span class="source-line" data-what="Одно ядро для двух вариантов чтения." data-how="Передаём буфер output и флаг shifted: 0 — все начинают вместе, 1 — каждый начинает со своего номера в warp." data-why="Код ядра тот же. Меняем только порядок, в котором потоки читают таблицу."><span class="line-no" aria-hidden="true">14</span><span class="src"><span class="call">__global__</span> void sum_table(int* output, int shifted) {</span></span>
+<span class="source-line" data-what="Уникальный номер потока во всей сетке." data-how="blockIdx.x * blockDim.x — номер первого потока блока. threadIdx.x добавляет позицию внутри блока." data-why="Разные блоки не обрабатывают одни и те же элементы."><span class="line-no" aria-hidden="true">15</span><span class="src">    const int tid = <span class="call">blockIdx</span>.x * <span class="call">blockDim</span>.x + <span class="call">threadIdx</span>.x;</span></span>
+<span class="source-line" data-what="Считаем номер потока внутри warp." data-how="Берём threadIdx.x % 32. Например, у потоков 0 и 32 в разных warp будет lane = 0." data-why="В блоке 128 потоков, то есть четыре warp. В каждом повторяется та же схема адресов."><span class="line-no" aria-hidden="true">16</span><span class="src">    const int lane = <span class="call">threadIdx</span>.x % 32;</span></span>
+<span class="source-line key" id="constant-shift" data-what="Выбираем, откуда поток начнёт читать." data-how="При shifted = 0 у всех first = 0. При shifted = 1 получаем first = lane: поток 0 начнёт с table[0], поток 1 — с table[1]." data-why="На каждом шаге у warp будет либо один общий адрес, либо по своему адресу на поток."><span class="line-no" aria-hidden="true">17</span><span class="src">    const int first = lane * shifted;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">18</span><span class="src"></span></span>
+<span class="source-line" data-what="Начинаем личную сумму с нуля." data-how="Каждый поток будет прибавлять к своей sum числа из table." data-why="Потоки не пишут в одну общую сумму."><span class="line-no" aria-hidden="true">19</span><span class="src">    int sum = 0;</span></span>
+<span class="source-line" data-what="Просим компилятор оставить цикл." data-how="#pragma unroll 1 относится к следующему for. Он по-прежнему сделает 32 шага, просто не разворачиваем их в отдельные инструкции." data-why="Для двух порядков читаем таблицу в одном и том же цикле."><span class="line-no" aria-hidden="true">20</span><span class="src">    #pragma unroll 1</span></span>
+<span class="source-line" data-what="Отсчитываем 32 чтения." data-how="Начинаем с first и идём по таблице по кругу. У всех одинаковое число сложений." data-why="В обоих порядках должен получиться один и тот же эталон."><span class="line-no" aria-hidden="true">21</span><span class="src">    for (int step = 0; step &lt; 32; ++step)</span></span>
+<span class="source-line key" id="constant-common" data-what="Читаем очередное число и прибавляем к sum." data-how="Индекс считаем как (first + step) % 32. Например, при first = 31 читаем table[31], затем table[0], table[1] и так далее." data-why="Без сдвига GPU раздаёт число по одному адресу всему warp (broadcast). Со сдвигом 32 разных адреса обслуживаются отдельно."><span class="line-no" aria-hidden="true">22</span><span class="src">        sum += table[(first + step) % 32];</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">23</span><span class="src"></span></span>
+<span class="source-line key" id="constant-output" data-what="Пишем свою сумму в output[tid]." data-how="У каждого потока, даже из другого блока, свой tid. Два потока не пишут в одну ячейку." data-why="Таблицу только читаем, а результаты пишем порознь. Гонки данных нет."><span class="line-no" aria-hidden="true">24</span><span class="src">    output[tid] = sum;</span></span>
+<span class="source-line" data-what="Закончили расчёт в ядре." data-how="Поток записал свою сумму в отдельную ячейку output." data-why="После завершения ядра CPU сможет забрать и проверить все суммы."><span class="line-no" aria-hidden="true">25</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">26</span><span class="src"></span></span>
+<span class="source-line" data-what="Порядок опыта на CPU." data-how="Готовим данные, запускаем GPU, проверяем ответ." data-why="Служебные шаги отделены от работы ядра."><span class="line-no" aria-hidden="true">27</span><span class="src">int main() {</span></span>
+<span class="source-line" data-what="Сначала готовим таблицу на CPU." data-how="Запишем числа в host_table, затем скопируем их в table на GPU." data-why="Оба варианта прочитают одни и те же числа."><span class="line-no" aria-hidden="true">28</span><span class="src"><span class="comment">    // Загрузить одну таблицу перед обоими запусками.</span></span></span>
+<span class="source-line" data-what="Таблица на CPU." data-how="Обычный массив из 32 int." data-why="Следом передаём его содержимое в constant memory."><span class="line-no" aria-hidden="true">29</span><span class="src">    int host_table[32];</span></span>
+<span class="source-line" data-what="Пишем в host_table[i] число i + 1." data-how="Элемент i получает i + 1." data-why="Порядок можно менять: сумма всех 32 чисел всё равно 528."><span class="line-no" aria-hidden="true">30</span><span class="src">    for (int i = 0; i &lt; 32; ++i) host_table[i] = i + 1;</span></span>
+<span class="source-line" data-what="Копируем числа в table на GPU." data-how="table — имя переменной в constant memory, host_table — адрес массива на CPU. sizeof(host_table) — размер всего массива в байтах. По умолчанию копируем с CPU на GPU." data-why="Загружаем таблицу один раз. Пока ядра работают, никто её не меняет."><span class="line-no" aria-hidden="true">31</span><span class="src">    check(<span class="call">cudaMemcpyToSymbol</span>(table, host_table, sizeof(host_table)));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">32</span><span class="src"></span></span>
+<span class="source-line" data-what="Размер сетки для замера." data-how="256 блоков по 128 потоков дают 32 768 результатов." data-why="Оба порядка повторяются на одинаковом числе warp."><span class="line-no" aria-hidden="true">33</span><span class="src">    constexpr int blocks = 256, threads = 128, n = blocks * threads;</span></span>
+<span class="source-line" data-what="Считаем размер массива сумм." data-how="Берём n * sizeof(int) байт: по одному int на каждый поток." data-why="cudaMalloc и cudaMemcpy принимают байты, а не количество чисел."><span class="line-no" aria-hidden="true">34</span><span class="src">    constexpr size_t bytes = n * sizeof(int);</span></span>
+<span class="source-line" data-what="Результаты на CPU." data-how="Один int на каждый поток сетки." data-why="Проверим все суммы после копирования."><span class="line-no" aria-hidden="true">35</span><span class="src">    std::vector&lt;int&gt; result(n);</span></span>
+<span class="source-line" data-what="Готовим указатель на выход на GPU." data-how="cudaMalloc запишет адрес в device. При запуске передадим его ядру как output." data-why="Ядро сохраняет сюда результаты."><span class="line-no" aria-hidden="true">36</span><span class="src">    int* device = nullptr;</span></span>
+<span class="source-line" data-what="Выделяем память под суммы на GPU." data-how="Просим bytes байт. CUDA записывает адрес в device." data-why="Выделение происходит до замера."><span class="line-no" aria-hidden="true">37</span><span class="src">    check(<span class="call">cudaMalloc</span>(&amp;device, bytes));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">38</span><span class="src"></span></span>
+<span class="source-line" data-what="Сначала прогреваем оба варианта." data-how="Запускаем одно ядро сначала с shifted = 0, затем с shifted = 1." data-why="Первые запуски не попадут в замер."><span class="line-no" aria-hidden="true">39</span><span class="src"><span class="comment">    // Прогреть оба порядка чтения.</span></span></span>
+<span class="source-line" data-what="Прогрев обоих порядков." data-how="Оба вызова проходят до метки начала измерения." data-why="Сравниваем работу после первых запусков."><span class="line-no" aria-hidden="true">40</span><span class="src">    for (int i = 0; i &lt; 12; ++i) {</span></span>
+<span class="source-line" data-what="Прогреваем вариант с одним адресом." data-how="Передаём shifted = 0: все потоки начинают с table[0]." data-why="На каждом шаге один адрес на warp."><span class="line-no" aria-hidden="true">41</span><span class="src">        sum_table&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(device, 0);</span></span>
+<span class="source-line" data-what="Прогреваем вариант со сдвигом." data-how="Передаём shifted = 1: каждый начинает с table[lane]." data-why="На каждом шаге адреса различаются."><span class="line-no" aria-hidden="true">42</span><span class="src">        sum_table&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(device, 1);</span></span>
+<span class="source-line" data-what="Закончили ставить запуски для прогрева." data-how="Метка start пойдёт в очереди после них." data-why="Время прогрева не попадёт в замер."><span class="line-no" aria-hidden="true">43</span><span class="src">    }</span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">44</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">45</span><span class="src"></span></span>
+<span class="source-line" data-what="Заводим два события CUDA: start и stop." data-how="cudaEvent_t — тип дескриптора. Сначала создаём события, потом ставим их в ту же очередь, что и ядра." data-why="Нам нужен интервал на GPU, а не время вызова запуска на CPU."><span class="line-no" aria-hidden="true">46</span><span class="src">    <span class="call">cudaEvent_t</span> start, stop;</span></span>
+<span class="source-line" data-what="Создаём событие start." data-how="CUDA пишет дескриптор в start. Время отметим позже, когда поставим событие в очередь через cudaEventRecord." data-why="Событие можно использовать для серии запусков."><span class="line-no" aria-hidden="true">47</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;start));</span></span>
+<span class="source-line" data-what="Создаём событие stop." data-how="CUDA пишет второй дескриптор в stop." data-why="По отметкам начала и конца узнаем длительность серии."><span class="line-no" aria-hidden="true">48</span><span class="src">    check(<span class="call">cudaEventCreate</span>(&amp;stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">49</span><span class="src"></span></span>
+<span class="source-line" data-what="Повторы для замера." data-how="В один интервал помещаем 100 одинаковых запусков." data-why="Один короткий запуск измерять шумно; берём среднее по серии."><span class="line-no" aria-hidden="true">50</span><span class="src">    constexpr int launches = 100;</span></span>
+<span class="source-line" data-what="Итог двух проверок." data-how="Начинаем с успеха. Ошибка любого варианта сделает результат ложным." data-why="Возвращаем успех только после двух правильных ответов."><span class="line-no" aria-hidden="true">51</span><span class="src">    bool all_correct = true;</span></span>
+<span class="source-line" data-what="Замеряем два порядка чтения." data-how="Первый проход с shifted = 0, второй с shifted = 1. Таблица, блоки и потоки те же." data-why="Время сравнивается для одного и того же объёма работы."><span class="line-no" aria-hidden="true">52</span><span class="src">    for (int shifted = 0; shifted &lt; 2; ++shifted) {</span></span>
+<span class="source-line" data-what="Обнуляем буфер сумм." data-how="cudaMemset пишет ноль в каждый из bytes байтов по адресу device. Это делаем до start." data-why="Ждём 528 от каждого потока. Если запись пропустили, старый ответ не скроет ошибку."><span class="line-no" aria-hidden="true">53</span><span class="src">        check(<span class="call">cudaMemset</span>(device, 0, bytes));</span></span>
+<span class="source-line" data-what="Ставим start перед серией." data-how="Очередь не передаём, поэтому берётся очередь по умолчанию (default stream). CUDA отметит время, когда дойдёт до start." data-why="Прогрев и подготовка выхода идут до этой метки."><span class="line-no" aria-hidden="true">54</span><span class="src">        check(<span class="call">cudaEventRecord</span>(start));</span></span>
+<span class="source-line" data-what="Повторяем один запуск." data-how="Цикл на CPU ставит launches ядер подряд в одну очередь." data-why="Метки измеряют весь интервал между началом и концом серии."><span class="line-no" aria-hidden="true">55</span><span class="src">        for (int i = 0; i &lt; launches; ++i)</span></span>
+<span class="source-line" data-what="Повторяем запуск с выбранным shifted." data-how="Каждый запуск заново суммирует таблицу и пишет в тот же device. Запуски идут по очереди в одном stream." data-why="Замеряем всё ядро, а не только чтение. Загрузка таблицы и проверка в интервал не входят."><span class="line-no" aria-hidden="true">56</span><span class="src">            sum_table&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(device, shifted);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">57</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем запуск." data-how="Получаем код ошибки запуска. Этот вызов не ждёт выполнения ядер." data-why="Ошибки выполнения проверяет также последующее ожидание."><span class="line-no" aria-hidden="true">58</span><span class="src">        check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line" data-what="Ставим stop за последним запуском." data-how="В той же очереди CUDA дойдёт до stop и отметит время, когда все запуски серии закончатся." data-why="Копирование и проверка будут уже после метки."><span class="line-no" aria-hidden="true">59</span><span class="src">        check(<span class="call">cudaEventRecord</span>(stop));</span></span>
+<span class="source-line" data-what="Ждём отметку конца." data-how="CPU ждёт, пока GPU дойдёт до stop. Все измеряемые запуски перед ним уже завершатся." data-why="Только теперь можно запросить длительность и читать результат."><span class="line-no" aria-hidden="true">60</span><span class="src">        check(<span class="call">cudaEventSynchronize</span>(stop));</span></span>
+<span class="source-line" data-what="Место для времени." data-how="cudaEventElapsedTime запишет в ms миллисекунды." data-why="Это время всей серии, не одного запуска."><span class="line-no" aria-hidden="true">61</span><span class="src">        float ms = 0.0f;</span></span>
+<span class="source-line" data-what="Узнаём, сколько шла серия." data-how="CUDA берёт разницу между отметками start и stop и пишет в ms миллисекунды." data-why="Чтобы получить время одного запуска, в выводе делим на количество повторов."><span class="line-no" aria-hidden="true">62</span><span class="src">        check(<span class="call">cudaEventElapsedTime</span>(&amp;ms, start, stop));</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">63</span><span class="src"></span></span>
+<span class="source-line" data-what="Копируем суммы на CPU." data-how="Из device копируем bytes байт в result.data() после stop." data-why="Передача на CPU происходит вне замера; теперь можно проверить значения."><span class="line-no" aria-hidden="true">64</span><span class="src">        check(<span class="call">cudaMemcpy</span>(result.data(), device, bytes, <span class="call">cudaMemcpyDeviceToHost</span>));</span></span>
+<span class="source-line" data-what="Начало проверки." data-how="Любое неверное значение ниже сбросит флаг." data-why="Время не считается подтверждением правильности."><span class="line-no" aria-hidden="true">65</span><span class="src">        bool correct = true;</span></span>
+<span class="source-line" data-what="Проверяем суммы всех потоков." data-how="Проходим по каждому числу в result, а не только по тому, что напечатаем." data-why="Оба порядка должны сохранить математический результат."><span class="line-no" aria-hidden="true">66</span><span class="src">        for (int sum : result)</span></span>
+<span class="source-line" data-what="Сравниваем каждую сумму с 528." data-how="Каждый поток складывал числа от 1 до 32. Сверяем ответ с эталоном, а не только с ответом другого варианта." data-why="Два одинаково неверных результата не проходят."><span class="line-no" aria-hidden="true">67</span><span class="src">            if (sum != 528) correct = false;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">68</span><span class="src"></span></span>
+<span class="source-line" data-what="Печатаем сумму, время и результат проверки." data-how="Печатаем данные после проверки." data-why="Можно сравнить оба варианта."><span class="line-no" aria-hidden="true">69</span><span class="src">        std::printf("%s: sum = %d; %.2f us/launch; %s\n",</span></span>
+<span class="source-line" data-what="Показываем вариант и одну сумму." data-how="При shifted = 0 печатаем One address, иначе Different addresses. Для примера берём result[0]." data-why="Легко сопоставить время с рисунком адресов."><span class="line-no" aria-hidden="true">70</span><span class="src">                    shifted ? "Different addresses" : "One address", result[0],</span></span>
+<span class="source-line" data-what="Среднее время одного запуска." data-how="Миллисекунды умножаем на 1000 и делим на launches: получаем микросекунды на запуск." data-why="PASS требует правильной суммы во всех 32 768 выходах."><span class="line-no" aria-hidden="true">71</span><span class="src">                    ms * 1000 / launches, correct ? "PASS" : "FAIL");</span></span>
+<span class="source-line" data-what="Запоминаем, прошли ли обе проверки." data-how="all_correct останется true, только если и прежний итог, и текущий correct равны true." data-why="Успех второго варианта не скрывает ошибку первого."><span class="line-no" aria-hidden="true">72</span><span class="src">        all_correct = all_correct &amp;&amp; correct;</span></span>
+<span class="source-line" data-what="Закончили проверку одного порядка чтения." data-how="После общего адреса переходим к сдвигу. После сдвига выходим из цикла." data-why="У каждого порядка свой замер и свой результат проверки."><span class="line-no" aria-hidden="true">73</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">74</span><span class="src"></span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">75</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(start));</span></span>
+<span class="source-line" data-what="Удаляем событие CUDA." data-how="Метка уже прочитана и больше не используется." data-why="Освобождаем ресурс замера."><span class="line-no" aria-hidden="true">76</span><span class="src">    check(<span class="call">cudaEventDestroy</span>(stop));</span></span>
+<span class="source-line" data-what="Освобождаем буфер сумм на GPU." data-how="Возвращаем память, выделенную через cudaMalloc." data-why="Эти данные уже проверены."><span class="line-no" aria-hidden="true">77</span><span class="src">    check(<span class="call">cudaFree</span>(device));</span></span>
+<span class="source-line" data-what="Код завершения." data-how="Успех — только при правильных результатах." data-why="Ошибка даёт ненулевой статус."><span class="line-no" aria-hidden="true">78</span><span class="src">    return all_correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Закончили main." data-how="Освободили буфер и события CUDA." data-why="Оболочка получит общий итог двух проверок."><span class="line-no" aria-hidden="true">79</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="constant-run-title">
+    <h2 id="constant-run-title">Запуск: общий адрес против 32 разных</h2>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 07_constant.cu -o 07_constant
+./07_constant</code></pre>
+    <p id="constant-timing">Вот вывод на Quadro RTX 6000:</p>
+    <pre><code>One address: sum = 528; 3.69 us/launch; PASS
+Different addresses: sum = 528; 26.07 us/launch; PASS</code></pre>
+    <p>Сверь <code>sum</code> в обеих строках: везде 528. Порядок чтения разный, но складываем те же числа. Печатаем сумму первого потока. <code>PASS</code> получаем, если все 32 768 потоков дали 528.</p>
+    <p>Теперь сравни <code>us/launch</code>: <strong>3,69 мкс с общим адресом и 26,07 мкс с разными</strong>. В первом случае warp на каждом шаге получает одно число на всех, во втором ему нужны 32 ячейки.</p>
+    <p>Через CUDA Events замерили 100 запусков после прогрева и посчитали среднее. Таблица к этому моменту уже на GPU, суммы проверяем после замера.</p>
+  </section>
+</article>
+  <nav class="lesson-nav" aria-label="Навигация лекции"><a href="index.html">← Все листинги лекции</a></nav>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script src="lesson.js"></script>
+</body>
+</html>

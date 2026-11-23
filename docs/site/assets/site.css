@@ -1,0 +1,89 @@
+.course-page {
+  margin: 0;
+  color-scheme: light;
+  background: #fcfcfb;
+  color: #181420;
+  font: 18px/1.6 system-ui, sans-serif;
+}
+
+.course-page main {
+  width: min(960px, calc(100% - clamp(32px, 7vw, 96px)));
+  margin: 0 auto;
+  padding-bottom: 48px;
+}
+
+.course-page a,
+.course-breadcrumbs a {
+  color: #57209f;
+  text-underline-offset: .19em;
+}
+
+.course-page a:focus-visible,
+.course-breadcrumbs a:focus-visible {
+  outline: 3px solid #792ce6;
+  outline-offset: 3px;
+}
+
+.course-breadcrumbs {
+  border-bottom: 1px solid #e8dfef;
+  color: #574f63;
+  font: 650 .9rem/1.4 system-ui, sans-serif;
+}
+
+.course-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+
+.course-breadcrumbs li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.course-breadcrumbs li + li::before {
+  width: 6px;
+  height: 6px;
+  border-top: 1px solid;
+  border-right: 1px solid;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.course-breadcrumbs a,
+.course-breadcrumbs [aria-current="page"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+}
+
+.course-breadcrumbs [aria-current="page"] { color: #181420; }
+.course-hero { padding: clamp(28px, 6vw, 72px) 0 clamp(24px, 4vw, 40px); }
+.course-page h1, .course-page h2, .course-page h3 { margin: 0; line-height: 1.2; }
+.course-page h1 { font-size: clamp(2.4rem, 7vw, 4rem); letter-spacing: -.04em; }
+.course-page h2 { font-size: 1.45rem; }
+.course-page h3 { font-size: 1.28rem; }
+.course-page p { margin: 8px 0 0; color: #574f63; }
+.course-page .course-kicker { margin: 0 0 8px; color: #57209f; font-weight: 750; }
+.course-page .course-lead { max-width: 59ch; margin-top: 12px; font-size: 1.13em; }
+
+.course-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 16px;
+}
+
+.course-card {
+  padding: clamp(16px, 3vw, 28px);
+  border: 1px solid #c8a8ec;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.course-list { display: grid; gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
+.course-section + .course-section { margin-top: 32px; }

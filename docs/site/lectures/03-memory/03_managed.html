@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Один массив для CPU и GPU · CUDA / Лекция 03</title>
+  <link rel="stylesheet" href="lesson.css">
+<style>
+  #managed code { font-size: max(18px, .91em); }
+  #managed .figure-note { font-size: 1rem; }
+  .managed-track { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px 19px; margin: 12px 0; padding: 0; list-style: none; }
+  .managed-track li { position: relative; min-width: 0; display: grid; align-content: start; justify-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 6px; text-align: center; }
+  .managed-track .gpu-step { border-color: var(--purple); background: var(--purple-wash); }
+  .managed-track li + li::before { position: absolute; left: -18px; top: 13px; width: 16px; content: '→' / ''; color: var(--muted); }
+  .managed-track strong { font: 750 1rem/1.4 var(--mono); overflow-wrap: anywhere; }
+  @media (max-width: 680px) {
+    .managed-track { grid-template-columns: 1fr; gap: 19px; }
+    .managed-track li { grid-template-columns: minmax(0, 1fr); align-items: center; justify-items: start; text-align: left; padding-inline: 12px; }
+    .managed-track li + li::before { content: '↓' / ''; inset: -20px auto auto 15px; }
+  }
+</style>
+  <link rel="stylesheet" href="lesson-nav.css">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+<main>
+  <nav class="course-breadcrumbs" aria-label="Путь по курсу">
+    <ol role="list">
+      <li><a href="../../index.html">Курс CUDA</a></li>
+      <li><a href="../index.html">Лекции</a></li>
+      <li><a href="index.html">Лекция 03</a></li>
+      <li><span aria-current="page">Пример 03</span></li>
+    </ol>
+  </nav>
+  <nav class="lesson-topnav" aria-label="Разделы примера">
+    <a href="#managed-flow-title">Схема</a>
+    <a href="#managed-listing-title">Код</a>
+    <a href="#managed-run-title">Запуск</a>
+  </nav>
+<header class="hero">
+  <p class="kicker">CUDA / Лекция 03 / Листинг 03</p>
+  <h1>Один массив для CPU и GPU</h1>
+  <p class="lead">Хотим прибавить <code>1</code> к каждому числу в <code>[2, 4, 6, 8]</code> на GPU и прочитать результат на CPU. Для этого будем работать с одним массивом, а не с двумя буферами.</p>
+</header>
+<article class="lesson-unit" id="managed">
+  <section class="flow" aria-labelledby="managed-flow-title">
+    <h2 id="managed-flow-title">CPU заполняет, GPU меняет, CPU читает</h2>
+    <p class="flow-intro">Выделяем массив через <code>cudaMallocManaged</code>. И CPU, и GPU обращаются к массиву по одному указателю. Это <strong>управляемая память</strong> (Unified Memory).</p>
+    <figure class="flow-figure managed-map" aria-labelledby="managed-figure-title">
+      <figcaption id="managed-figure-title">Один указатель <code>values</code> на всех шагах</figcaption>
+      <ol class="managed-track">
+        <li><span>CPU заполняет</span><strong>[2, 4, 6, 8]</strong></li>
+        <li class="gpu-step"><span>GPU прибавляет 1</span><strong>[3, 5, 7, 9]</strong></li>
+        <li><span>CPU ждёт ядро и читает</span><strong>[3, 5, 7, 9]</strong></li>
+      </ol>
+      <p class="figure-note">Во всех трёх шагах используем <code>values</code>, ни разу не вызывая <code>cudaMemcpy</code>. Это не значит, что данные лежат на одном месте: если нужно, CUDA сама перемещает их между RAM и памятью GPU.</p>
+    </figure>
+  </section>
+  <section class="listing" aria-labelledby="managed-listing-title">
+    <header class="listing-header">
+      <h2 id="managed-listing-title">Код: прибавляем 1 к каждому числу</h2>
+      <div class="actions"><a href="03_managed.cu" download>Скачать .cu</a><button type="button" data-copy="managed-code" hidden>Скопировать код</button><span class="sr-only" role="status"></span></div>
+    </header>
+    <div class="listing-grid">
+      <aside class="reading" aria-labelledby="managed-reading-title">
+        <h3 id="managed-reading-title">Как передать ядру тот же массив</h3>
+        <p><a href="#managed-alloc">Строка 19</a>: выделяем общий массив. Затем заполняем его с CPU.</p>
+        <p><a href="#managed-kernel">Строка 27</a>: передаём ядру тот же <code>values</code>. Каждый из четырёх потоков прибавляет 1 к своему числу.</p>
+        <p><a href="#managed-wait">Строка 29</a>: ждём, пока GPU закончит менять числа. Только потом читаем <code>values</code> с CPU.</p>
+      </aside>
+      <figure class="code-frame" id="managed-code">
+  <figcaption>03_managed.cu<span class="hint-how" hidden>Наведи курсор на номер непустой строки или нажми на него · ↑/↓ — переход по строкам. Чтобы закрыть подсказку, нажми Esc или коснись страницы рядом с ней.</span></figcaption>
+  <pre><code><span class="source-line" data-what="Подключаем заголовок CUDA Runtime." data-how="В нём объявлены функции CUDA, которые вызываем с CPU." data-why="Здесь они нужны, чтобы выделить управляемую память, дождаться GPU и проверить ошибки."><span class="line-no" aria-hidden="true">1</span><span class="src">#include &lt;cuda_runtime.h&gt;</span></span>
+<span class="source-line" data-what="Заголовок стандартного вывода C++." data-how="Объявляет printf и fprintf." data-why="Печатаем массив и сообщения об ошибках."><span class="line-no" aria-hidden="true">2</span><span class="src">#include &lt;cstdio&gt;</span></span>
+<span class="source-line" data-what="Подключаем заголовок для выхода из программы." data-how="В нём объявлены std::exit, EXIT_SUCCESS и EXIT_FAILURE." data-why="Сообщаем оболочке, прошла ли проверка."><span class="line-no" aria-hidden="true">3</span><span class="src">#include &lt;cstdlib&gt;</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">4</span><span class="src"></span></span>
+<span class="source-line" data-what="Проверяем, удался ли вызов CUDA." data-how="Передаём в check код, который вернула функция CUDA." data-why="Если вызов не удался, дальше не идём."><span class="line-no" aria-hidden="true">5</span><span class="src">void check(<span class="call">cudaError_t</span> status) {</span></span>
+<span class="source-line" data-what="Проверяем, вернула ли CUDA cudaSuccess." data-how="Если да, сразу выходим из check." data-why="Продолжаем со строки после вызова check."><span class="line-no" aria-hidden="true">6</span><span class="src">    if (status == <span class="call">cudaSuccess</span>) return;</span></span>
+<span class="source-line" data-what="Печатаем причину ошибки." data-how="cudaGetErrorString даёт текст ошибки, а fprintf пишет его в stderr." data-why="Можно увидеть, почему пример не выполнился."><span class="line-no" aria-hidden="true">7</span><span class="src">    std::fprintf(stderr, &quot;%s\n&quot;, <span class="call">cudaGetErrorString</span>(status));</span></span>
+<span class="source-line" data-what="Останавливаем программу из-за ошибки." data-how="std::exit передаёт системе ненулевой код." data-why="Не используем память после неудачного вызова."><span class="line-no" aria-hidden="true">8</span><span class="src">    std::exit(EXIT_FAILURE);</span></span>
+<span class="source-line" data-what="Закончили check." data-how="Если всё в порядке, продолжаем со строки после вызова." data-why="Граница функции проверки ошибок."><span class="line-no" aria-hidden="true">9</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">10</span><span class="src"></span></span>
+<span class="source-line" data-what="В этом ядре прибавляем единицу к каждому числу." data-how="Передаём в add_one указатель values." data-why="Это тот же указатель, по которому CPU записал числа."><span class="line-no" aria-hidden="true">11</span><span class="src"><span class="call">__global__</span> void add_one(int* values) {</span></span>
+<span class="source-line" data-what="Индекс потока внутри блока." data-how="При запуске четырёх потоков получаем индексы 0…3." data-why="Каждый поток обрабатывает своё число."><span class="line-no" aria-hidden="true">12</span><span class="src">    int i = threadIdx.x;</span></span>
+<span class="source-line" data-what="Прибавляем 1 к числу в values[i]." data-how="Например, поток 2 читает 6 из values[2] и пишет туда 7." data-why="CPU увидит новое число, когда дождётся ядра."><span class="line-no" aria-hidden="true">13</span><span class="src">    values[i] += 1;</span></span>
+<span class="source-line" data-what="Закончили прибавление в ядре." data-how="Каждый поток изменил одно число." data-why="Граница кода, выполняемого на GPU."><span class="line-no" aria-hidden="true">14</span><span class="src">}</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">15</span><span class="src"></span></span>
+<span class="source-line" data-what="Начало программы на CPU." data-how="Заполняем массив на CPU, меняем его на GPU, затем ждём и читаем на CPU." data-why="Показываем один проход CPU → GPU → CPU."><span class="line-no" aria-hidden="true">16</span><span class="src">int main() {</span></span>
+<span class="source-line code-section" data-what="Готовим массив на CPU." data-how="Выделяем память, к которой могут обращаться и CPU, и GPU, и записываем числа." data-why="Эту же память передадим ядру."><span class="line-no" aria-hidden="true">17</span><span class="src">    <span class="comment">// CPU заполняет массив в управляемой памяти.</span></span></span>
+<span class="source-line" data-what="Указатель на общий массив." data-how="Пока адреса нет — ставим nullptr. cudaMallocManaged запишет адрес в values." data-why="Сохраняем один указатель на весь пример."><span class="line-no" aria-hidden="true">18</span><span class="src">    int* values = nullptr;</span></span>
+<span class="source-line key" id="managed-alloc" data-what="Выделяем один массив, доступный CPU и GPU." data-how="Выделяем 4 * sizeof(int) байт. &amp;values — куда CUDA запишет адрес. По нему CPU заполняет массив, а ядро меняет числа." data-why="Не заводим отдельные буферы для CPU и GPU и не копируем данные между ними через cudaMemcpy."><span class="line-no" aria-hidden="true">19</span><span class="src">    check(<span class="call">cudaMallocManaged</span>(&amp;values, 4 * sizeof(int)));</span></span>
+<span class="source-line" data-what="Исходные числа для примера." data-how="Обычный массив CPU хранит начальные значения." data-why="С ним сверим результат после прибавления."><span class="line-no" aria-hidden="true">20</span><span class="src">    const int input[] = {2, 4, 6, 8};</span></span>
+<span class="source-line" data-what="Записываем числа в values с CPU." data-how="Например, в values[2] пишем 6 из input[2]." data-why="Ядро прочитает числа из values."><span class="line-no" aria-hidden="true">21</span><span class="src">    for (int i = 0; i &lt; 4; ++i) values[i] = input[i];</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">22</span><span class="src"></span></span>
+<span class="source-line" data-what="Печать массива до запуска." data-how="CPU читает только что заполненный values." data-why="Этот вывод показывает, какие числа получает ядро."><span class="line-no" aria-hidden="true">23</span><span class="src">    std::printf("before: [%d, %d, %d, %d]\n",</span></span>
+<span class="source-line" data-what="Берём четыре числа для printf." data-how="Читаем элементы values с индексами 0–3." data-why="Печатаем то, что сейчас лежит в массиве, а не заранее заданный ответ."><span class="line-no" aria-hidden="true">24</span><span class="src">                values[0], values[1], values[2], values[3]);</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">25</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="Теперь меняем массив на GPU." data-how="Передаём ядру тот же values." data-why="Продолжаем работу с массивом без явной передачи через cudaMemcpy."><span class="line-no" aria-hidden="true">26</span><span class="src">    <span class="comment">// GPU меняет тот же массив.</span></span></span>
+<span class="source-line key" id="managed-kernel" data-what="Запускаем один блок из четырёх потоков." data-how="Всем передаём один указатель values. Поток с индексом i меняет values[i]." data-why="У каждого числа свой поток, поэтому единицу прибавляем к нему только раз."><span class="line-no" aria-hidden="true">27</span><span class="src">    add_one&lt;&lt;&lt;1, 4&gt;&gt;&gt;(values);</span></span>
+<span class="source-line" data-what="Проверяем, удалось ли запустить ядро." data-how="cudaGetLastError даёт код ошибки, если запуск add_one не удался." data-why="Проверяем сам запуск. Чтобы узнать, закончилась ли работа, ждём следующей строкой."><span class="line-no" aria-hidden="true">28</span><span class="src">    check(<span class="call">cudaGetLastError</span>());</span></span>
+<span class="source-line key" id="managed-wait" data-what="Ждём, пока ядро закончит работу." data-how="cudaDeviceSynchronize ждёт уже отправленную работу GPU. Если вызов удался, CPU может читать values." data-why="Так CPU не прочитает число, пока GPU его меняет. Ожидание не показывает, где лежат страницы: CUDA может переместить их, когда к ним обратятся."><span class="line-no" aria-hidden="true">29</span><span class="src">    check(<span class="call">cudaDeviceSynchronize</span>());</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">30</span><span class="src"></span></span>
+<span class="source-line code-section" data-what="После ожидания читаем результат с CPU." data-how="Читаем числа по тому же указателю values." data-why="Видно, что оба процессора работали с одним массивом."><span class="line-no" aria-hidden="true">31</span><span class="src">    <span class="comment">// CPU читает массив после ожидания.</span></span></span>
+<span class="source-line" data-what="Печать изменённого массива." data-how="CPU читает тот же values после завершения ядра." data-why="Можно сравнить содержимое массива до и после работы GPU."><span class="line-no" aria-hidden="true">32</span><span class="src">    std::printf("after: [%d, %d, %d, %d]\n",</span></span>
+<span class="source-line" data-what="Четыре результата." data-how="Читаем те же элементы с индексами 0–3." data-why="По выводу видна прибавленная единица для каждого элемента."><span class="line-no" aria-hidden="true">33</span><span class="src">                values[0], values[1], values[2], values[3]);</span></span>
+<span class="source-line" data-what="Заводим флаг для проверки." data-how="Сначала ставим true. Если найдём отличие, поставим false." data-why="Код завершения покажет итог проверки."><span class="line-no" aria-hidden="true">34</span><span class="src">    bool correct = true;</span></span>
+<span class="source-line" data-what="Проверка всех элементов." data-how="Цикл обходит четыре позиции." data-why="Смотрим, что ядро изменило весь массив."><span class="line-no" aria-hidden="true">35</span><span class="src">    for (int i = 0; i &lt; 4; ++i) {</span></span>
+<span class="source-line" data-what="Проверяем число с индексом i." data-how="Сравниваем values[i] с input[i] + 1. Например, в values[2] ждём 7." data-why="Так видно, что ядро не просто записало числа, а прибавило именно 1."><span class="line-no" aria-hidden="true">36</span><span class="src">        if (values[i] != input[i] + 1) correct = false;</span></span>
+<span class="source-line" data-what="Закрываем цикл проверки." data-how="Если есть ещё число, сравниваем его на следующем шаге." data-why="Когда проверим все четыре, в correct будет общий итог."><span class="line-no" aria-hidden="true">37</span><span class="src">    }</span></span>
+<span class="source-line"><span class="line-no" aria-hidden="true">38</span><span class="src"></span></span>
+<span class="source-line" data-what="Освобождаем управляемый массив." data-how="cudaFree освобождает массив values." data-why="CPU и GPU завершили работу с ним."><span class="line-no" aria-hidden="true">39</span><span class="src">    check(<span class="call">cudaFree</span>(values));</span></span>
+<span class="source-line" data-what="Код завершения программы." data-how="Успех означает совпадение всех четырёх чисел." data-why="Результат можно проверить при запуске."><span class="line-no" aria-hidden="true">40</span><span class="src">    return correct ? EXIT_SUCCESS : EXIT_FAILURE;</span></span>
+<span class="source-line" data-what="Конец программы." data-how="Массив прочитан, проверен и освобождён." data-why="Все шаги примера завершены."><span class="line-no" aria-hidden="true">41</span><span class="src">}</span></span></code></pre>
+</figure>
+    </div>
+  </section>
+  <section class="run" aria-labelledby="managed-run-title">
+    <h2 id="managed-run-title">Запуск: массив до и после ядра</h2>
+    <p>Нужны CUDA Toolkit и GPU с поддержкой управляемой памяти.</p>
+    <pre><code>nvcc -std=c++17 -O3 -arch=sm_75 03_managed.cu -o managed
+./managed</code></pre>
+    <p>Вывод:</p>
+    <pre><code>before: [2, 4, 6, 8]
+after: [3, 5, 7, 9]</code></pre>
+    <p>Сравни <code>before</code> и <code>after</code>: в каждой ячейке стало на 1 больше. Оба раза CPU читает один и тот же массив через <code>values</code>: до запуска ядра и после ожидания.</p>
+  </section>
+</article>
+  <nav class="lesson-nav" aria-label="Навигация лекции"><a href="index.html">← Все листинги лекции</a></nav>
+</main>
+<div class="line-tip" id="line-tip" aria-hidden="true" hidden><strong></strong><dl><dt>Что</dt><dd data-field="what"></dd><dt>Как</dt><dd data-field="how"></dd><dt>Зачем</dt><dd data-field="why"></dd></dl></div>
+<script src="lesson.js"></script>
+</body>
+</html>
